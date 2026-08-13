@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Server Test Console</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+        .header { background: #1e293b; border-bottom: 1px solid #334155; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+        .header h1 { font-size: 18px; font-weight: 600; }
+        .header .status { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+        .header .dot { width: 8px; height: 8px; border-radius: 50%; }
+        .dot.green { background: #22c55e; }
+        .dot.red { background: #ef4444; }
+        .dot.yellow { background: #eab308; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+        .auth-section { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+        .auth-section h2 { font-size: 14px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+        .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+        label { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+        input, select, textarea { width: 100%; padding: 8px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0; font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: #3b82f6; }
+        .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s; }
+        .btn-primary { background: #3b82f6; color: white; }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-primary:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+        .btn-danger { background: #dc2626; color: white; }
+        .btn-danger:hover { background: #b91c1c; }
+        .btn-sm { padding: 6px 12px; font-size: 12px; }
+        .btn-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .tools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-bottom: 20px; }
+        .tool-card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 16px; transition: border-color 0.15s; }
+        .tool-card:hover { border-color: #475569; }
+        .tool-card h3 { font-size: 14px; font-weight: 600; margin-bottom: 4px; color: #f1f5f9; }
+        .tool-card p { font-size: 12px; color: #94a3b8; margin-bottom: 12px; line-height: 1.5; }
+        .tool-card .fields { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+        .result-panel { background: #1e293b; border: 1px solid #334155; border-radius: 8px; overflow: hidden; }
+        .result-header { padding: 12px 16px; background: #1e293b; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
+        .result-header h2 { font-size: 14px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+        .result-body { padding: 16px; max-height: 500px; overflow-y: auto; }
+        .result-body pre { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+        .log-time { color: #64748b; font-size: 11px; }
+        .log-method { color: #a78bfa; font-weight: 600; }
+        .log-ok { color: #22c55e; }
+        .log-err { color: #ef4444; }
+        .log-pending { color: #eab308; }
+        .user-info { font-size: 13px; color: #94a3b8; }
+        .user-info strong { color: #e2e8f0; }
+        .hidden { display: none; }
+        .device-code-box { background: #0f172a; border: 2px solid #3b82f6; border-radius: 8px; padding: 20px; margin-top: 12px; text-align: center; }
+        .device-code-box .code { font-size: 28px; font-weight: 700; letter-spacing: 4px; color: #f1f5f9; margin: 12px 0; font-family: 'SF Mono', 'Fira Code', monospace; }
+        .device-code-box a { color: #3b82f6; text-decoration: none; }
+        .device-code-box a:hover { text-decoration: underline; }
+        .device-code-box .hint { font-size: 12px; color: #64748b; margin-top: 8px; }
+        .token-input { margin-top: 12px; }
+        .token-input textarea { height: 60px; resize: vertical; }
+        .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+        .checkbox-row input[type=checkbox] { width: auto; margin: 0; }
+        .checkbox-row label { margin: 0; color: #e2e8f0; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>MCP Server Test Console</h1>
+        <div class="status">
+            <span id="authStatus" class="user-info">Not signed in</span>
+            <span id="statusDot" class="dot red"></span>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Auth Config -->
+        <div class="auth-section">
+            <h2>Configuration</h2>
+            <div class="config-grid">
+                <div>
+                    <label for="mcpUrl">MCP Server URL</label>
+                    <input type="text" id="mcpUrl" value="/mcp">
+                </div>
+                <div>
+                    <label for="tenantId">Tenant ID</label>
+                    <input type="text" id="tenantId" value="f6560c8e-4c9f-40b4-b0a3-300214e55870">
+                </div>
+                <div>
+                    <label for="clientId">Client ID (MCP App)</label>
+                    <input type="text" id="clientId" value="8090291f-98ae-452b-b6a5-89e668622023">
+                </div>
+                <div>
+                    <label for="scopes">Graph Scopes</label>
+                    <input type="text" id="scopes" value="8090291f-98ae-452b-b6a5-89e668622023/.default offline_access">
+                </div>
+            </div>
+            <div class="btn-row">
+                <button class="btn btn-primary" id="btnDeviceCode" onclick="startDeviceCodeFlow()">Sign in (Device Code)</button>
+                <button class="btn btn-primary" id="btnPasteToken" onclick="toggleTokenInput()">Paste Token</button>
+                <button class="btn btn-danger hidden" id="btnLogout" onclick="logout()">Sign out</button>
+            </div>
+            <div id="deviceCodeBox" class="device-code-box hidden">
+                <div>Go to <a id="deviceCodeLink" href="" target="_blank"></a> and enter:</div>
+                <div class="code" id="deviceCodeValue"></div>
+                <div class="hint" id="deviceCodeHint">Waiting for authentication...</div>
+            </div>
+            <div id="tokenInputBox" class="token-input hidden">
+                <label>Access Token</label>
+                <textarea id="tokenPaste" placeholder="Paste your access token here..."></textarea>
+                <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="useToken(document.getElementById('tokenPaste').value.trim())">Use Token</button>
+            </div>
+        </div>
+
+        <!-- Tools -->
+        <div class="tools-grid">
+            <div class="tool-card">
+                <h3>Search Emails</h3>
+                <p>Search or filter emails. Query ($search) and filter options are mutually exclusive.</p>
+                <div class="fields">
+                    <div><label>Query ($search)</label><input type="text" id="emailQuery" placeholder="budget meeting"></div>
+                    <div><label for="emailTop">Top</label><input type="number" id="emailTop" value="5" min="1" max="50"></div>
+                    <div>
+                        <label for="emailFolder">Folder</label>
+                        <select id="emailFolder">
+                            <option value="">All mail</option>
+                            <option value="inbox">Inbox</option>
+                            <option value="sentitems">Sent</option>
+                            <option value="drafts">Drafts</option>
+                            <option value="deleteditems">Deleted</option>
+                            <option value="junkemail">Junk</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="emailOrderBy">Order by</label>
+                        <select id="emailOrderBy">
+                            <option value="receivedDateTime desc">Newest first</option>
+                            <option value="receivedDateTime asc">Oldest first</option>
+                            <option value="subject asc">Subject A–Z</option>
+                            <option value="subject desc">Subject Z–A</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="emailIsRead">Read status</label>
+                        <select id="emailIsRead">
+                            <option value="">Any</option>
+                            <option value="false">Unread only</option>
+                            <option value="true">Read only</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="emailHasAttach">Attachments</label>
+                        <select id="emailHasAttach">
+                            <option value="">Any</option>
+                            <option value="true">With attachments</option>
+                            <option value="false">Without attachments</option>
+                        </select>
+                    </div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="searchEmails()">Search</button>
+            </div>
+
+            <div class="tool-card">
+                <h3>Calendar Events</h3>
+                <p>Get upcoming calendar events</p>
+                <div class="fields">
+                    <div><label for="calDays">Days ahead</label><input type="number" id="calDays" value="7" min="1" max="90"></div>
+                    <div><label for="calTop">Top</label><input type="number" id="calTop" value="10" min="1" max="100"></div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="callTool('get_calendar_events', {days: parseInt(g('calDays')), top: parseInt(g('calTop'))})">Get Events</button>
+            </div>
+
+            <div class="tool-card">
+                <h3>Recent Files</h3>
+                <p>List recently modified OneDrive files</p>
+                <div class="fields">
+                    <div><label for="filesTop">Top</label><input type="number" id="filesTop" value="10" min="1" max="100"></div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="callTool('list_recent_files', {top: parseInt(g('filesTop'))})">List Files</button>
+            </div>
+
+            <div class="tool-card">
+                <h3>User Summary</h3>
+                <p>AI-generated summary of recent activity</p>
+                <div class="fields">
+                    <div>
+                        <label for="summaryRange">Time Range</label>
+                        <select id="summaryRange">
+                            <option value="24h">Last 24 hours</option>
+                            <option value="7d">Last 7 days</option>
+                            <option value="30d">Last 30 days</option>
+                        </select>
+                    </div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="callTool('get_user_summary', {timeRange: g('summaryRange')})">Get Summary</button>
+            </div>
+        </div>
+
+            <div class="tool-card">
+                <h3>Meeting Transcript</h3>
+                <p>Retrieve a Teams meeting transcript. Requires <code>OnlineMeetingTranscript.Read.All</code> scope.</p>
+                <div class="fields">
+                    <div><label>Subject (keyword)</label><input type="text" id="txSubject" placeholder="Weekly Sync"></div>
+                    <div><label for="txDate">Date (YYYY-MM-DD)</label><input type="date" id="txDate"></div>
+                    <div class="checkbox-row">
+                        <input type="checkbox" id="txLast">
+                        <label for="txLast">Most recent matching meeting</label>
+                    </div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="getTranscript()">Get Transcript</button>
+            </div>
+
+        <!-- Results -->
+        <div class="result-panel">
+            <div class="result-header">
+                <h2>Results</h2>
+                <button class="btn btn-sm" style="background:#334155;color:#94a3b8;" onclick="clearLog()">Clear</button>
+            </div>
+            <div class="result-body" id="resultBody">
+                <pre id="resultPre" style="color:#64748b;">Sign in and call a tool to see results here.</pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let accessToken = null;
+        let pollTimer = null;
+
+        function g(id) { return document.getElementById(id).value; }
+
+        function getTranscript() {
+            var args = {};
+            var subject = g('txSubject');
+            var date = g('txDate');
+            var last = document.getElementById('txLast').checked;
+            if (subject) args.subject = subject;
+            if (date) args.date = date;
+            if (last) args.last_meeting = true;
+            callTool('get_meeting_transcript', args);
+        }
+
+        function searchEmails() {
+            var args = { top: parseInt(g('emailTop')) };
+            var query = g('emailQuery');
+            var folder = g('emailFolder');
+            var orderby = g('emailOrderBy');
+            var isRead = g('emailIsRead');
+            var hasAttach = g('emailHasAttach');
+            if (query) args.query = query;
+            if (folder) args.folder = folder;
+            if (!query && orderby) args.orderby = orderby;
+            if (!query && isRead !== '') args.isRead = isRead === 'true';
+            if (!query && hasAttach !== '') args.hasAttachments = hasAttach === 'true';
+            callTool('search_emails', args);
+        }
+
+        // --- Device Code Flow (no CDN dependency) ---
+
+        async function startDeviceCodeFlow() {
+            const scopes = g('scopes');
+
+            try {
+                // Use server-side proxy to avoid CORS issues with Azure AD
+                const resp = await fetch('/auth/devicecode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ scope: scopes })
+                });
+
+                const data = await resp.json();
+
+                if (data.error) {
+                    logResult('Auth', `Device code error: ${data.error_description || data.error}`, true);
+                    return;
+                }
+
+                // Show device code UI
+                const box = document.getElementById('deviceCodeBox');
+                box.classList.remove('hidden');
+                document.getElementById('deviceCodeValue').textContent = data.user_code;
+                const link = document.getElementById('deviceCodeLink');
+                link.href = data.verification_uri;
+                link.textContent = data.verification_uri;
+                document.getElementById('deviceCodeHint').textContent = 'Waiting for authentication...';
+
+                // Open login page
+                window.open(data.verification_uri, '_blank');
+
+                // Poll for token via server-side proxy
+                pollForToken(data.device_code, data.interval || 5);
+
+            } catch (err) {
+                logResult('Auth', `Failed to start device code flow: ${err.message}`, true);
+            }
+        }
+
+        function pollForToken(deviceCode, interval) {
+            if (pollTimer) clearInterval(pollTimer);
+
+            async function poll() {
+                try {
+                    // Use server-side proxy (same origin, no CORS)
+                    const resp = await fetch('/auth/token', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: new URLSearchParams({ device_code: deviceCode })
+                    });
+
+                    const data = await resp.json();
+
+                    if (data.error === 'authorization_pending') {
+                        return; // Keep polling
+                    }
+
+                    if (data.error === 'slow_down') {
+                        clearInterval(pollTimer);
+                        interval += 5;
+                        pollTimer = setInterval(poll, interval * 1000);
+                        return;
+                    }
+
+                    if (data.error) {
+                        clearInterval(pollTimer);
+                        document.getElementById('deviceCodeHint').textContent = `Error: ${data.error}`;
+                        logResult('Auth', `Token error: ${data.error_description || data.error}`, true);
+                        return;
+                    }
+
+                    // Success
+                    clearInterval(pollTimer);
+                    useToken(data.access_token);
+                    document.getElementById('deviceCodeBox').classList.add('hidden');
+
+                } catch (err) {
+                    clearInterval(pollTimer);
+                    logResult('Auth', `Poll error: ${err.message}`, true);
+                }
+            }
+
+            pollTimer = setInterval(poll, interval * 1000);
+        }
+
+        // --- Paste Token ---
+
+        function toggleTokenInput() {
+            document.getElementById('tokenInputBox').classList.toggle('hidden');
+        }
+
+        // --- Token Management ---
+
+        function useToken(token) {
+            if (!token) return;
+            accessToken = token;
+
+            // Try to decode user info from token (if JWT)
+            let userName = 'authenticated user';
+            try {
+                const parts = token.split('.');
+                if (parts.length >= 2) {
+                    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+                    userName = payload.name || payload.upn || payload.preferred_username || payload.email || userName;
+                }
+            } catch {}
+
+            document.getElementById('authStatus').innerHTML = `Signed in as <strong>${escapeHtml(userName)}</strong>`;
+            document.getElementById('statusDot').className = 'dot green';
+            document.getElementById('btnDeviceCode').classList.add('hidden');
+            document.getElementById('btnPasteToken').classList.add('hidden');
+            document.getElementById('btnLogout').classList.remove('hidden');
+            document.getElementById('tokenInputBox').classList.add('hidden');
+            logResult('Auth', 'Signed in successfully');
+        }
+
+        function logout() {
+            accessToken = null;
+            if (pollTimer) clearInterval(pollTimer);
+            document.getElementById('authStatus').textContent = 'Not signed in';
+            document.getElementById('statusDot').className = 'dot red';
+            document.getElementById('btnDeviceCode').classList.remove('hidden');
+            document.getElementById('btnPasteToken').classList.remove('hidden');
+            document.getElementById('btnLogout').classList.add('hidden');
+            document.getElementById('deviceCodeBox').classList.add('hidden');
+            logResult('Auth', 'Signed out');
+        }
+
+        // --- MCP Tool Calls ---
+
+        async function callTool(name, args) {
+            if (!accessToken) {
+                logResult(name, 'Not signed in. Please sign in first.', true);
+                return;
+            }
+
+            for (const k in args) {
+                if (args[k] === undefined || args[k] === '' || (typeof args[k] === 'number' && isNaN(args[k]))) {
+                    delete args[k];
+                }
+            }
+
+            const body = {
+                jsonrpc: '2.0',
+                id: Date.now(),
+                method: 'tools/call',
+                params: { name, arguments: args }
+            };
+
+            logResult(name, `Calling with ${JSON.stringify(args)}...`, false, true);
+
+            try {
+                const resp = await fetch(g('mcpUrl'), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${accessToken}`
+                    },
+                    body: JSON.stringify(body)
+                });
+
+                const data = await resp.json();
+
+                if (data.error) {
+                    logResult(name, `Error ${data.error.code}: ${data.error.message}`, true);
+                } else if (data.result && data.result.content) {
+                    const text = data.result.content.map(function(c) { return c.text || JSON.stringify(c); }).join('\n');
+                    try {
+                        const parsed = JSON.parse(text);
+                        logResult(name, JSON.stringify(parsed, null, 2));
+                    } catch (e) {
+                        logResult(name, text);
+                    }
+                } else {
+                    logResult(name, JSON.stringify(data, null, 2));
+                }
+            } catch (err) {
+                logResult(name, `Network error: ${err.message}`, true);
+            }
+        }
+
+        // --- Logging ---
+
+        function logResult(method, text, isError, isPending) {
+            var el = document.getElementById('resultPre');
+            var time = new Date().toLocaleTimeString();
+            var cls = isError ? 'log-err' : isPending ? 'log-pending' : 'log-ok';
+            el.innerHTML += '\n<span class="log-time">[' + time + ']</span> <span class="log-method">' + escapeHtml(method) + '</span>\n<span class="' + cls + '">' + escapeHtml(text) + '</span>\n';
+            el.parentElement.scrollTop = el.parentElement.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('resultPre').innerHTML = '';
+        }
+
+        function escapeHtml(text) {
+            var d = document.createElement('div');
+            d.textContent = text;
+            return d.innerHTML;
+        }
+    </script>
+</body>
+</html>
