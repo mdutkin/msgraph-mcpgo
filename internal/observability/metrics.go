@@ -17,11 +17,6 @@ type Metrics struct {
 	GraphAPICallTotal    *prometheus.CounterVec
 	GraphAPICallErrors   *prometheus.CounterVec
 
-	// Gemini API metrics
-	GeminiAPICallDuration *prometheus.HistogramVec
-	GeminiAPICallTotal    *prometheus.CounterVec
-	GeminiAPICallErrors   *prometheus.CounterVec
-
 	// Token validation metrics
 	TokenValidationTotal   *prometheus.CounterVec
 	TokenValidationErrors  *prometheus.CounterVec
@@ -88,30 +83,6 @@ func NewMetrics() *Metrics {
 				Help: "Total number of MS Graph API call errors",
 			},
 			[]string{"endpoint", "error_type"},
-		),
-
-		// Gemini API metrics
-		GeminiAPICallDuration: promauto.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Name:    "gemini_api_call_duration_seconds",
-				Help:    "Duration of Gemini API calls in seconds",
-				Buckets: prometheus.DefBuckets,
-			},
-			[]string{"operation", "status"},
-		),
-		GeminiAPICallTotal: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "gemini_api_call_total",
-				Help: "Total number of Gemini API calls",
-			},
-			[]string{"operation", "status"},
-		),
-		GeminiAPICallErrors: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "gemini_api_call_errors_total",
-				Help: "Total number of Gemini API call errors",
-			},
-			[]string{"operation", "error_type"},
 		),
 
 		// Token validation metrics

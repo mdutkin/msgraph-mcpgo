@@ -11,7 +11,6 @@ import (
 
 	"github.com/fnfbraga/msgraph-mcpgo/internal/attachments"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/auth"
-	"github.com/fnfbraga/msgraph-mcpgo/internal/gemini"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/msgraph"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/observability"
 	apperrors "github.com/fnfbraga/msgraph-mcpgo/pkg/errors"
@@ -36,7 +35,6 @@ type Server struct {
 	mcpServer           *server.MCPServer
 	tokenValidator      *auth.TokenValidator
 	oboExchanger        *auth.OBOExchanger
-	geminiAgent         *gemini.Agent
 	graphClientConfig   msgraph.ClientConfig
 	attachmentExtractor *attachments.Extractor
 	circuitBreaker      *gobreaker.CircuitBreaker
@@ -50,7 +48,6 @@ type Server struct {
 type ServerConfig struct {
 	TokenValidator      *auth.TokenValidator
 	OBOExchanger        *auth.OBOExchanger
-	GeminiAgent         *gemini.Agent
 	AttachmentExtractor *attachments.Extractor
 	CircuitBreaker      *gobreaker.CircuitBreaker
 	Logger              *zerolog.Logger
@@ -65,7 +62,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	s := &Server{
 		tokenValidator:      cfg.TokenValidator,
 		oboExchanger:        cfg.OBOExchanger,
-		geminiAgent:         cfg.GeminiAgent,
 		attachmentExtractor: cfg.AttachmentExtractor,
 		circuitBreaker:      cfg.CircuitBreaker,
 		logger:              cfg.Logger,
@@ -82,7 +78,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 
 	// Create MCP server with capabilities
 	mcpServer := server.NewMCPServer(
-		"MS Graph + Gemini MCP Server",
+		"MS Graph MCP Server",
 		"1.0.0",
 		server.WithResourceCapabilities(false, true),
 		server.WithLogging(),
@@ -137,8 +133,6 @@ func (s *Server) createToolHandler(toolName string) server.ToolHandlerFunc {
 		// Route to appropriate handler
 		var result interface{}
 		switch toolName {
-		case "get_user_summary":
-			result, err = s.handleGetUserSummary(ctx, args)
 		case "search_emails":
 			result, err = s.handleSearchEmails(ctx, args)
 		case "get_calendar_events":
@@ -157,8 +151,6 @@ func (s *Server) createToolHandler(toolName string) server.ToolHandlerFunc {
 			result, err = s.handleScheduleMeeting(ctx, args)
 		case "search_sharepoint":
 			result, err = s.handleSearchSharepoint(ctx, args)
-		case "summarize_teams_chat":
-			result, err = s.handleSummarizeTeamsChat(ctx, args)
 		case "send_teams_message":
 			result, err = s.handleSendTeamsMessage(ctx, args)
 		case "get_user_org_chart":

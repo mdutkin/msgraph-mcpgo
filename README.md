@@ -1,6 +1,6 @@
 # msgraph-mcpgo
 
-A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that gives AI clients delegated access to Microsoft 365 through Microsoft Graph. It supports Outlook, calendars, Teams, OneDrive, SharePoint, directory search, document extraction, and Gemini-powered summaries.
+A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that gives AI clients delegated access to Microsoft 365 through Microsoft Graph. It supports Outlook, calendars, Teams, OneDrive, SharePoint, directory search and document extraction.
 
 > **Important:** This server operates on behalf of signed-in users. Review the requested Microsoft Graph permissions, apply least privilege, and never expose it without authentication in production.
 
@@ -10,10 +10,9 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 - Microsoft Entra ID token validation and OAuth On-Behalf-Of exchange
 - Outlook email search, reading, attachments, and sending
 - Calendar events, availability lookup, and Teams meeting scheduling
-- Teams chat retrieval, summarization, and sending
+- Teams chat retrieval and sending
 - OneDrive and SharePoint search, upload, page reading, and document extraction
 - Directory search, organization charts, and expert discovery
-- Gemini-generated activity and chat summaries
 - Retries, circuit breaking, structured logs, health checks, and Prometheus metrics
 
 ## Architecture
@@ -22,19 +21,18 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
         |
         | Bearer token + JSON-RPC
         v
-    msgraph-mcpgo -----> Google Gemini
+    msgraph-mcpgo
         |
         | Entra validation + OAuth OBO
         v
     Microsoft Graph
 
-The client sends a Microsoft Entra ID access token to POST /mcp. The server validates it, exchanges it through the OBO flow for a delegated Microsoft Graph token, and invokes Graph APIs as that user. Gemini is used by tools that generate AI-assisted results.
+The client sends a Microsoft Entra ID access token to POST /mcp. The server validates it, exchanges it through the OBO flow for a delegated Microsoft Graph token, and invokes Graph APIs as that user.
 
 ## Requirements
 
 - Go 1.26 or later
 - A Microsoft Entra ID tenant and app registration
-- A Google Gemini API key
 - Docker (optional)
 
 ## Microsoft Entra ID setup
@@ -73,7 +71,6 @@ Set at least these values in .env:
     AZURE_TENANT_ID=your-tenant-id
     AZURE_CLIENT_ID=your-client-id
     AZURE_CLIENT_SECRET=your-client-secret
-    GEMINI_API_KEY=your-gemini-api-key
 
 AZURE_CLIENT_SECRET is required by the application even though it is not currently listed in .env.example.
 
@@ -101,13 +98,10 @@ Default endpoints:
 | AZURE_TENANT_ID | Yes | — | Microsoft Entra tenant ID |
 | AZURE_CLIENT_ID | Yes | — | App registration client ID and expected token audience |
 | AZURE_CLIENT_SECRET | Yes | — | App secret used for OBO exchange |
-| GEMINI_API_KEY | Yes | — | Google Gemini API key |
 | ENVIRONMENT | No | production | Runtime environment; development enables development logging |
 | SERVER_PORT | No | 8080 | HTTP server port |
 | METRICS_PORT | No | 9090 | Prometheus metrics port |
-| GEMINI_MODEL | No | gemini-2.0-flash | Gemini model name |
 | GRAPH_TIMEOUT | No | 60s | Microsoft Graph operation timeout |
-| GEMINI_TIMEOUT | No | 60s | Gemini operation timeout |
 | TOKEN_CACHE_TTL | No | 5m | Token cache lifetime |
 | JWKS_CACHE_TTL | No | 24h | Entra JWKS cache lifetime |
 | LOG_LEVEL | No | info | Structured logging level |
@@ -156,7 +150,6 @@ The browser console at /test supports the Entra device-code flow through /auth/d
 
 - list_chats — List chats and participants
 - get_chat_messages — Retrieve messages and supported attachment content
-- summarize_teams_chat — Summarize recent messages with Gemini
 - send_teams_message — Send a chat message
 
 ### OneDrive and SharePoint
@@ -168,12 +161,11 @@ The browser console at /test supports the Entra device-code flow through /auth/d
 - get_sharepoint_page_content — Extract content from SharePoint .aspx pages
 - upload_file — Upload up to 4 MB of base64-encoded content to OneDrive
 
-### Users and AI
+### Users
 
 - search_users — Search the tenant directory
 - get_user_org_chart — Retrieve a manager and direct reports
 - find_experts — Find colleagues by skills or project context
-- get_user_summary — Summarize recent mail, files, and calendar activity with Gemini
 
 Detailed schemas, arguments, and limits are available through tools/list.
 
@@ -234,7 +226,6 @@ Standard validation:
 - Terminate TLS at the service or a trusted reverse proxy in production.
 - Restrict access to the test console and metrics endpoint as appropriate.
 - Use least-privilege Graph permissions and review tenant consent regularly.
-- Microsoft 365 content sent to Gemini may be processed outside Microsoft 365. Review Google data handling, organizational policy, and regulatory requirements before deployment.
 - Do not log tokens or message and document contents when adding handlers.
 
 ## Contributing

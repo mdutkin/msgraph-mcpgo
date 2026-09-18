@@ -19,7 +19,6 @@ const (
 	// Custom application error codes
 	ErrCodeTokenValidation ErrorCode = -32001
 	ErrCodeGraphAPI        ErrorCode = -32002
-	ErrCodeGeminiAPI       ErrorCode = -32003
 	ErrCodeRateLimit       ErrorCode = -32004
 	ErrCodeCircuitOpen     ErrorCode = -32005
 	ErrCodeClientError     ErrorCode = -32006 // 4xx client errors (not retryable, not infrastructure)
@@ -70,16 +69,6 @@ func NewGraphAPIError(cause error, details map[string]interface{}) *AppError {
 	return &AppError{
 		Code:    ErrCodeGraphAPI,
 		Message: "Microsoft Graph API error",
-		Cause:   cause,
-		Details: details,
-	}
-}
-
-// NewGeminiAPIError creates a Gemini API error
-func NewGeminiAPIError(cause error, details map[string]interface{}) *AppError {
-	return &AppError{
-		Code:    ErrCodeGeminiAPI,
-		Message: "Gemini API error",
 		Cause:   cause,
 		Details: details,
 	}

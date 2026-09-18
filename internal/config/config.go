@@ -19,13 +19,8 @@ type Config struct {
 	AzureClientID     string `env:"AZURE_CLIENT_ID,required"`
 	AzureClientSecret string `env:"AZURE_CLIENT_SECRET,required"`
 
-	// Google Gemini
-	GeminiAPIKey string `env:"GEMINI_API_KEY,required"`
-	GeminiModel  string `env:"GEMINI_MODEL" envDefault:"gemini-2.0-flash"`
-
 	// Timeouts
-	GraphTimeout  time.Duration `env:"GRAPH_TIMEOUT" envDefault:"60s"`
-	GeminiTimeout time.Duration `env:"GEMINI_TIMEOUT" envDefault:"60s"`
+	GraphTimeout time.Duration `env:"GRAPH_TIMEOUT" envDefault:"60s"`
 
 	// Caching
 	TokenCacheTTL time.Duration `env:"TOKEN_CACHE_TTL" envDefault:"5m"`

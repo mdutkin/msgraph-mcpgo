@@ -14,7 +14,6 @@ import (
 	"github.com/fnfbraga/msgraph-mcpgo/internal/attachments"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/auth"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/config"
-	"github.com/fnfbraga/msgraph-mcpgo/internal/gemini"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/health"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/mcp"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/observability"
@@ -39,7 +38,7 @@ func main() {
 		Str("environment", cfg.Environment).
 		Int("server_port", cfg.ServerPort).
 		Int("metrics_port", cfg.MetricsPort).
-		Msg("Starting MS Graph + Gemini MCP Server")
+		Msg("Starting MS Graph MCP Server")
 
 	// Initialize metrics
 	metrics := observability.NewMetrics()
@@ -74,7 +73,7 @@ func main() {
 			if err == nil {
 				return true
 			}
-			// Don't count context cancellations (e.g. from errgroup sibling failures) as failures
+			// Don't count context cancellations from sibling failures as failures
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return true
 			}
@@ -114,24 +113,10 @@ func main() {
 		},
 	})
 
-	// Initialize Gemini agent
-	geminiAgent, err := gemini.NewAgent(
-		cfg.GeminiAPIKey,
-		cfg.GeminiModel,
-		cfg.GeminiTimeout,
-		&logger,
-		metrics,
-	)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create Gemini agent")
-	}
-	defer geminiAgent.Close()
-
 	// Initialize MCP server
 	mcpServer, err := mcp.NewServer(mcp.ServerConfig{
 		TokenValidator:      tokenValidator,
 		OBOExchanger:        oboExchanger,
-		GeminiAgent:         geminiAgent,
 		AttachmentExtractor: attachments.New(),
 		CircuitBreaker:      circuitBreaker,
 		Logger:              &logger,

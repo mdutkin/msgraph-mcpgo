@@ -8,37 +8,6 @@ import (
 func DefineMCPTools() []mcp.Tool {
 	return []mcp.Tool{
 		{
-			Name:        "get_user_summary",
-			Description: "Get an AI-generated summary of recent user activity including emails, files, and calendar events",
-			InputSchema: mcp.ToolInputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"timeRange": map[string]interface{}{
-						"type":        "string",
-						"description": "Time range for the summary",
-						"enum":        []string{"24h", "7d", "30d"},
-						"default":     "24h",
-					},
-					"includeEmails": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Include emails in the summary",
-						"default":     true,
-					},
-					"includeFiles": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Include files in the summary",
-						"default":     true,
-					},
-					"includeCalendar": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Include calendar events in the summary",
-						"default":     true,
-					},
-				},
-				Required: []string{},
-			},
-		},
-		{
 			Name:        "search_emails",
 			Description: "Search or filter emails. Returns metadata only (no body or attachments). To read the full body and attachments of a specific email, use get_email_details or read_email with the email id from these results. Note: 'query' ($search) and filter options (filter/isRead/hasAttachments/orderby) are mutually exclusive due to MS Graph API limitations.",
 			InputSchema: mcp.ToolInputSchema{
@@ -304,27 +273,6 @@ func DefineMCPTools() []mcp.Tool {
 					},
 				},
 				Required: []string{"query"},
-			},
-		},
-		{
-			Name:        "summarize_teams_chat",
-			Description: "Retrieves recent messages from a specific Teams chat or channel and summarizes them.",
-			InputSchema: mcp.ToolInputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"chat_id": map[string]interface{}{
-						"type":        "string",
-						"description": "The ID of the chat to summarize",
-					},
-					"message_count": map[string]interface{}{
-						"type":        "integer",
-						"description": "Number of recent messages to include in the summary",
-						"default":     50,
-						"minimum":     1,
-						"maximum":     100,
-					},
-				},
-				Required: []string{"chat_id"},
 			},
 		},
 		{

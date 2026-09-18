@@ -12,7 +12,7 @@ func TestExtractMCPMethod(t *testing.T) {
 	}{
 		{"tools/list", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, "tools/list"},
 		{"initialize", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`, "initialize"},
-		{"tools/call", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_user_summary"}}`, "tools/call"},
+		{"tools/call", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_emails"}}`, "tools/call"},
 		{"empty body", ``, ""},
 		{"invalid json", `not json`, ""},
 		{"no method field", `{"jsonrpc":"2.0","id":1}`, ""},

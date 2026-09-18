@@ -10,108 +10,8 @@ import (
 	"time"
 
 	"github.com/fnfbraga/msgraph-mcpgo/internal/attachments"
-	"github.com/fnfbraga/msgraph-mcpgo/internal/gemini"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/msgraph"
-	"golang.org/x/sync/errgroup"
 )
-
-// handleGetUserSummary handles the get_user_summary tool
-func (s *Server) handleGetUserSummary(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	// Extract parameters with defaults
-	timeRange := "24h"
-	if tr, ok := args["timeRange"].(string); ok {
-		timeRange = tr
-	}
-
-	includeEmails := true
-	if ie, ok := args["includeEmails"].(bool); ok {
-		includeEmails = ie
-	}
-
-	includeFiles := true
-	if if_, ok := args["includeFiles"].(bool); ok {
-		includeFiles = if_
-	}
-
-	includeCalendar := true
-	if ic, ok := args["includeCalendar"].(bool); ok {
-		includeCalendar = ic
-	}
-
-	s.logger.Info().
-		Str("time_range", timeRange).
-		Bool("include_emails", includeEmails).
-		Bool("include_files", includeFiles).
-		Bool("include_calendar", includeCalendar).
-		Msg("Getting user summary")
-
-	// Get Graph client from context
-	graphClient, err := s.getGraphClient(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// Fetch data concurrently.
-	// Use a plain errgroup (no WithContext) so one failure doesn't cancel siblings.
-	// This prevents the 1-failure-becomes-3 cascade that was tripping the circuit breaker.
-	var g errgroup.Group
-
-	var emails []*msgraph.Email
-	var files []*msgraph.File
-	var events []*msgraph.Event
-
-	if includeEmails {
-		g.Go(func() error {
-			filter := s.buildTimeRangeFilter(timeRange)
-			var fetchErr error
-			emails, fetchErr = graphClient.GetEmails(ctx, 20, filter)
-			return fetchErr
-		})
-	}
-
-	if includeFiles {
-		g.Go(func() error {
-			var fetchErr error
-			files, fetchErr = graphClient.GetRecentFiles(ctx, 20)
-			return fetchErr
-		})
-	}
-
-	if includeCalendar {
-		g.Go(func() error {
-			start := time.Now()
-			end := start.AddDate(0, 0, 7)
-			var fetchErr error
-			events, fetchErr = graphClient.GetCalendarEvents(ctx, start, end, "")
-			return fetchErr
-		})
-	}
-
-	// Wait for all operations to complete
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-
-	// Generate summary using Gemini
-	summary, err := s.geminiAgent.SummarizeActivity(ctx, &gemini.ActivityData{
-		Emails:    emails,
-		Files:     files,
-		Events:    events,
-		TimeRange: timeRange,
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	s.logger.Info().
-		Int("email_count", len(emails)).
-		Int("file_count", len(files)).
-		Int("event_count", len(events)).
-		Msg("User summary generated successfully")
-
-	return summary, nil
-}
 
 // handleSearchEmails handles the search_emails tool
 func (s *Server) handleSearchEmails(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -559,24 +459,6 @@ func (s *Server) handleSearchUsers(ctx context.Context, args map[string]interfac
 	}, nil
 }
 
-// buildTimeRangeFilter builds an OData filter for the given time range
-func (s *Server) buildTimeRangeFilter(timeRange string) string {
-	var cutoff time.Time
-
-	switch timeRange {
-	case "24h":
-		cutoff = time.Now().Add(-24 * time.Hour)
-	case "7d":
-		cutoff = time.Now().Add(-7 * 24 * time.Hour)
-	case "30d":
-		cutoff = time.Now().Add(-30 * 24 * time.Hour)
-	default:
-		cutoff = time.Now().Add(-24 * time.Hour)
-	}
-
-	return fmt.Sprintf("receivedDateTime ge %s", cutoff.Format(time.RFC3339))
-}
-
 // handleResourceRead handles reading a resource
 func (s *Server) handleResourceRead(ctx context.Context, uri string) (interface{}, error) {
 	s.logger.Info().
@@ -739,44 +621,6 @@ func (s *Server) handleSearchSharepoint(ctx context.Context, args map[string]int
 	return map[string]interface{}{
 		"results": results,
 		"count":   len(results),
-	}, nil
-}
-
-// handleSummarizeTeamsChat handles the summarize_teams_chat tool
-func (s *Server) handleSummarizeTeamsChat(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	chatID, _ := args["chat_id"].(string)
-	if chatID == "" {
-		return nil, fmt.Errorf("chat_id is required")
-	}
-
-	msgCount := 50
-	if val, ok := args["message_count"].(float64); ok {
-		msgCount = int(val)
-	}
-
-	s.logger.Info().Str("chat_id", chatID).Int("message_count", msgCount).Msg("Summarizing Teams chat")
-
-	graphClient, err := s.getGraphClient(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	messages, err := graphClient.GetChatMessages(ctx, msgraph.GetChatMessagesRequest{
-		ChatID:              chatID,
-		Top:                 int32(msgCount),
-		AttachmentExtractor: s.attachmentExtractor,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	summary, err := s.geminiAgent.SummarizeChat(ctx, messages)
-	if err != nil {
-		return nil, err
-	}
-
-	return map[string]interface{}{
-		"summary": summary,
 	}, nil
 }
 
