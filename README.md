@@ -154,7 +154,8 @@ secret is optional and the same Dockerfile builds unchanged without it.
 | AZURE_TENANT_ID | Yes | — | Microsoft Entra tenant ID. A token from another directory is refused |
 | ENVIRONMENT | No | production | Runtime environment; development enables development logging |
 | SERVER_PORT | No | 8080 | HTTP server port |
-| PUBLIC_URL | No | http://localhost:8080 | Externally reachable base URL. Published as the OAuth protected resource identifier and in every 401 challenge |
+| PUBLIC_URL | No | http://localhost:8080 | Base URL clients reach. Published as the OAuth protected resource identifier and in every 401 challenge |
+| NETWORK_EXPOSURE | No | internet | `internet` requires PUBLIC_URL to be https. `internal` relaxes that for a service reachable only inside the private network, such as one addressed over ECS Service Connect |
 | TOOL_POLICY_FILE | No | tools.yaml | YAML document selecting which tools and resources are exposed. When set, a missing file stops startup |
 | MCP_STATELESS | No | true | Keep the Streamable HTTP transport free of per-session state. Required when more than one task serves a load balancer target group |
 | METRICS_PORT | No | 9090 | Prometheus metrics port |

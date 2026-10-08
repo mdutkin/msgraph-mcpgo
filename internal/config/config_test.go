@@ -114,3 +114,37 @@ func TestPublicURLValidation(t *testing.T) {
 		})
 	}
 }
+
+// A service reached only over ECS Service Connect has no https name to
+// publish, so the https requirement is relaxed for it — and only for it.
+func TestInternalExposureRelaxesPublicURLScheme(t *testing.T) {
+	tests := []struct {
+		name      string
+		exposure  string
+		publicURL string
+		wantErr   bool
+	}{
+		{"internal over http", "internal", "http://msgraph-mcp:8080", false},
+		{"internal over https", "internal", "https://msgraph-mcp.example.com", false},
+		{"internet over http", "internet", "http://msgraph-mcp.example.com", true},
+		{"internet over https", "internet", "https://msgraph-mcp.example.com", false},
+		// The loopback check is independent of exposure: it catches a value
+		// that names the container rather than the service.
+		{"internal over loopback", "internal", "http://127.0.0.1:8080", true},
+		{"unknown exposure", "elsewhere", "https://msgraph-mcp.example.com", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			baseEnv(t)
+			t.Setenv("ENVIRONMENT", "production")
+			t.Setenv("NETWORK_EXPOSURE", tt.exposure)
+			t.Setenv("PUBLIC_URL", tt.publicURL)
+
+			_, err := Load()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, wantErr = %v", err, tt.wantErr)
+			}
+		})
+	}
+}

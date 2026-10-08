@@ -51,6 +51,7 @@ func main() {
 		Int("server_port", cfg.ServerPort).
 		Int("metrics_port", cfg.MetricsPort).
 		Str("public_url", cfg.PublicURL).
+		Str("network_exposure", cfg.NetworkExposure).
 		Bool("mcp_stateless", cfg.MCPStateless).
 		Str("version", version).
 		Str("commit", commit).

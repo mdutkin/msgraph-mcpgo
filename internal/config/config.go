@@ -24,6 +24,19 @@ type Config struct {
 	// the hostname clients actually connect to, not the container address.
 	PublicURL string `env:"PUBLIC_URL" envDefault:"http://localhost:8080"`
 
+	// NetworkExposure declares where this instance is reachable from, which
+	// decides how strictly PublicURL is checked.
+	//
+	// "internet" is the default and the strict setting: PublicURL must be
+	// https, because the value is handed to clients and a plaintext one
+	// invites a credential to cross the public network.
+	//
+	// "internal" relaxes that for a deployment reached only from inside the
+	// private network, such as an ECS service addressed over Service Connect
+	// at http://msgraph-mcp:8080, where TLS terminates at the perimeter and
+	// there is no https name to publish.
+	NetworkExposure string `env:"NETWORK_EXPOSURE" envDefault:"internet"`
+
 	// ToolPolicyFile points at the YAML document that decides which tools and
 	// resources this deployment exposes. When the variable is set, a missing
 	// file is a startup error. When it is unset, a missing file at the default
@@ -112,6 +125,11 @@ func Load() (*Config, error) {
 // is rejected rather than tolerated: a typo such as "Production" or "prod "
 // would otherwise satisfy neither IsProduction nor IsDevelopment, leaving the
 // operator with a deployment whose posture is not what the variable says.
+var knownNetworkExposures = map[string]bool{
+	"internet": true,
+	"internal": true,
+}
+
 var knownEnvironments = map[string]bool{
 	"development": true,
 	"dev":         true,
@@ -131,6 +149,11 @@ var knownEnvironments = map[string]bool{
 // nothing downstream can detect the difference.
 func (c *Config) Validate() error {
 	var problems []string
+
+	if !knownNetworkExposures[c.NetworkExposure] {
+		problems = append(problems, fmt.Sprintf(
+			"NETWORK_EXPOSURE=%q is not recognised; use \"internet\" or \"internal\"", c.NetworkExposure))
+	}
 
 	if !knownEnvironments[c.Environment] {
 		problems = append(problems, fmt.Sprintf(
@@ -184,12 +207,14 @@ func (c *Config) validatePublicURL() []string {
 	}
 
 	// Outside development the value is published to clients as the resource
-	// identifier and in every 401 challenge, so a default or internal value
-	// gives clients a metadata URL they cannot reach.
-	if u.Scheme != "https" {
+	// identifier and in every 401 challenge, so a default or unreachable value
+	// gives clients a metadata URL they cannot use.
+	if u.Scheme != "https" && c.NetworkExposure != "internal" {
 		problems = append(problems, fmt.Sprintf(
-			"PUBLIC_URL=%q must use https when ENVIRONMENT=%q: the value is advertised to "+
-				"clients as the OAuth protected resource identifier", c.PublicURL, c.Environment))
+			"PUBLIC_URL=%q must use https when ENVIRONMENT=%q and NETWORK_EXPOSURE=%q: the value "+
+				"is advertised to clients as the OAuth protected resource identifier. Set "+
+				"NETWORK_EXPOSURE=internal if this instance is only reachable inside the "+
+				"private network", c.PublicURL, c.Environment, c.NetworkExposure))
 	}
 	if isLoopbackOrUnspecified(u.Hostname()) {
 		problems = append(problems, fmt.Sprintf(
