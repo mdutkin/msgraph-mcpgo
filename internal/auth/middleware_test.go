@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fnfbraga/msgraph-mcpgo/internal/observability"
 	"github.com/rs/zerolog"
@@ -248,5 +249,195 @@ func TestPassthroughModeForwardsGraphToken(t *testing.T) {
 	}
 	if seenUser != "22222222-2222-2222-2222-222222222222" {
 		t.Errorf("user id not propagated: %q", seenUser)
+	}
+}
+
+// ── verified_identity mode ───────────────────────────────────────────────────
+
+func newVerifiedMiddleware(t *testing.T, entra *fakeEntra) *Middleware {
+	t.Helper()
+
+	m, err := NewMiddleware(MiddlewareConfig{
+		Inspector: NewGraphTokenInspector(testTenantID),
+		Verifier:  entra.verifier(t, time.Minute),
+		Mode:      ModeVerifiedIdentity,
+		Logger:    testLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewMiddleware: %v", err)
+	}
+	return m
+}
+
+// graphTokenFor builds a forwarded Graph token for a given object id.
+func graphTokenFor(t *testing.T, oid, tid string) string {
+	t.Helper()
+	payload := graphPayload()
+	payload["oid"] = oid
+	payload["tid"] = tid
+	return makeToken(t, payload)
+}
+
+func TestVerifiedModeAcceptsBothCredentials(t *testing.T) {
+	entra := newFakeEntra(t)
+	entra.addKey("key-1", true)
+	m := newVerifiedMiddleware(t, entra)
+
+	graphToken := graphTokenFor(t, testOID, testTenantID)
+
+	var forwarded string
+	var recordedUser string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwarded, _ = TokenFromContext(r.Context())
+		recordedUser = observability.GetUserID(r.Context())
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+graphToken)
+	req.Header.Set(DefaultAssertionHeader, entra.assertion("key-1", nil))
+
+	rec := httptest.NewRecorder()
+	m.Handler(next).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	// The Graph credential must reach the transport untouched: it is the thing
+	// that actually calls Microsoft Graph.
+	if forwarded != graphToken {
+		t.Error("the Graph token was altered on the way to the transport")
+	}
+	// The identity recorded must be the verified one.
+	if recordedUser != testOID {
+		t.Errorf("recorded user = %q, want the verified oid", recordedUser)
+	}
+}
+
+func TestVerifiedModeRequiresTheAssertion(t *testing.T) {
+	entra := newFakeEntra(t)
+	entra.addKey("key-1", true)
+	m := newVerifiedMiddleware(t, entra)
+
+	reached := false
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+graphTokenFor(t, testOID, testTenantID))
+
+	rec := httptest.NewRecorder()
+	m.Handler(okHandler(&reached)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without an assertion, got %d", rec.Code)
+	}
+	if reached {
+		t.Fatal("a request with no assertion reached the transport")
+	}
+	// The challenge should tell the operator which header is missing.
+	if !strings.Contains(rec.Body.String(), DefaultAssertionHeader) {
+		t.Errorf("response does not name the assertion header: %s", rec.Body.String())
+	}
+}
+
+func TestVerifiedModeRejectsAForgedAssertion(t *testing.T) {
+	entra := newFakeEntra(t)
+	entra.addKey("key-1", true)
+	entra.addKey("forged", false)
+	m := newVerifiedMiddleware(t, entra)
+
+	reached := false
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+graphTokenFor(t, testOID, testTenantID))
+	req.Header.Set(DefaultAssertionHeader, entra.assertion("forged", nil))
+
+	rec := httptest.NewRecorder()
+	m.Handler(okHandler(&reached)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	if reached {
+		t.Fatal("a forged assertion reached the transport")
+	}
+}
+
+// Pairing a valid assertion with another user's Graph token must be refused, so
+// that a Graph call cannot be recorded under an identity that does not match
+// the credential used to make it.
+func TestVerifiedModeRejectsMismatchedCredentials(t *testing.T) {
+	entra := newFakeEntra(t)
+	entra.addKey("key-1", true)
+	m := newVerifiedMiddleware(t, entra)
+
+	otherUser := "99999999-9999-9999-9999-999999999999"
+
+	reached := false
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+graphTokenFor(t, otherUser, testTenantID))
+	req.Header.Set(DefaultAssertionHeader, entra.assertion("key-1", nil))
+
+	rec := httptest.NewRecorder()
+	m.Handler(okHandler(&reached)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for mismatched credentials, got %d", rec.Code)
+	}
+	if reached {
+		t.Fatal("mismatched credentials reached the transport")
+	}
+}
+
+// The Graph token is still inspected in verified mode: a valid assertion must
+// not excuse a Graph token this server cannot use.
+func TestVerifiedModeStillInspectsTheGraphToken(t *testing.T) {
+	entra := newFakeEntra(t)
+	entra.addKey("key-1", true)
+	m := newVerifiedMiddleware(t, entra)
+
+	payload := graphPayload()
+	payload["aud"] = "api://44444444-4444-4444-4444-444444444444"
+
+	reached := false
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+makeToken(t, payload))
+	req.Header.Set(DefaultAssertionHeader, entra.assertion("key-1", nil))
+
+	rec := httptest.NewRecorder()
+	m.Handler(okHandler(&reached)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	if reached {
+		t.Fatal("a non-Graph token reached the transport")
+	}
+}
+
+func TestNewMiddlewareRequiresAVerifierInVerifiedMode(t *testing.T) {
+	_, err := NewMiddleware(MiddlewareConfig{
+		Inspector: NewGraphTokenInspector(testTenantID),
+		Mode:      ModeVerifiedIdentity,
+		Logger:    testLogger(),
+	})
+	if err == nil {
+		t.Fatal("verified_identity mode was accepted with no verifier")
+	}
+}
+
+func TestParseValidationMode(t *testing.T) {
+	cases := map[string]ValidationMode{
+		"verified_identity": ModeVerifiedIdentity,
+		"graph_passthrough": ModeGraphPassthrough,
+		"disabled":          ModeDisabled,
+	}
+	for in, want := range cases {
+		got, err := ParseValidationMode(in)
+		if err != nil || got != want {
+			t.Errorf("ParseValidationMode(%q) = %v, %v", in, got, err)
+		}
+		if got.String() != in {
+			t.Errorf("round trip failed: %q -> %q", in, got.String())
+		}
+	}
+	if _, err := ParseValidationMode("whatever"); err == nil {
+		t.Error("an unknown mode was accepted")
 	}
 }

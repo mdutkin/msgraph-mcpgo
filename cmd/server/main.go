@@ -52,6 +52,7 @@ func main() {
 		Int("metrics_port", cfg.MetricsPort).
 		Str("public_url", cfg.PublicURL).
 		Str("network_exposure", cfg.NetworkExposure).
+		Str("auth_mode", cfg.AuthMode).
 		Bool("mcp_stateless", cfg.MCPStateless).
 		Str("version", version).
 		Str("commit", commit).
@@ -65,6 +66,48 @@ func main() {
 	// secret and no on-behalf-of exchange are involved, so this process holds
 	// no credential and cannot act for a user who is not currently calling it.
 	graphTokenInspector := auth.NewGraphTokenInspector(cfg.AzureTenantID)
+
+	validationMode, err := auth.ParseValidationMode(cfg.AuthMode)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid authentication configuration")
+	}
+
+	// In verified_identity mode the caller also sends an Entra token that can
+	// be verified, because the Graph token cannot be: Microsoft publishes no
+	// signing keys for tokens issued to its own APIs. Verifying the assertion
+	// is what makes the identity in the audit log and in the rate limit key
+	// Entra's statement rather than the caller's.
+	var identityVerifier *auth.IdentityVerifier
+	if validationMode == auth.ModeVerifiedIdentity {
+		// The cache refreshes lazily on access, so it owns no goroutine and
+		// needs no lifetime beyond this call.
+		jwksCache, issuer, err := auth.NewJWKSCache(context.Background(), auth.JWKSConfig{
+			TenantID:           cfg.AzureTenantID,
+			RefreshInterval:    cfg.JWKSRefreshInterval,
+			MinRefreshInterval: cfg.JWKSMinRefreshInterval,
+			DiscoveryURL:       cfg.EntraDiscoveryURL,
+			Logger:             &logger,
+		})
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to read the Entra signing keys")
+		}
+
+		identityVerifier, err = auth.NewIdentityVerifier(auth.IdentityVerifierConfig{
+			JWKS:      jwksCache,
+			TenantID:  cfg.AzureTenantID,
+			Audiences: cfg.IdentityAudiences,
+			Logger:    &logger,
+		})
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to create the identity verifier")
+		}
+
+		logger.Info().
+			Str("issuer", issuer).
+			Strs("accepted_audiences", cfg.IdentityAudiences).
+			Str("assertion_header", cfg.IdentityAssertionHeader).
+			Msg("Identity assertion verification enabled")
+	}
 
 	// Initialize circuit breaker for MS Graph
 	circuitBreaker := gobreaker.NewCircuitBreaker(gobreaker.Settings{
@@ -150,16 +193,13 @@ func main() {
 	}
 
 	// Authentication is applied to every MCP request, discovery included.
-	validationMode := auth.ModeGraphPassthrough
-	if cfg.DisableAuth {
-		validationMode = auth.ModeDisabled
-	}
-
 	resourceIdentifier := strings.TrimSuffix(cfg.PublicURL, "/")
 	metadataPath := server.ProtectedResourceMetadataPath(resourceIdentifier)
 
 	authMiddleware, err := auth.NewMiddleware(auth.MiddlewareConfig{
 		Inspector:           graphTokenInspector,
+		Verifier:            identityVerifier,
+		AssertionHeader:     cfg.IdentityAssertionHeader,
 		Mode:                validationMode,
 		ResourceMetadataURL: resourceIdentifier + metadataPath,
 		Logger:              &logger,

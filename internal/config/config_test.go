@@ -33,34 +33,85 @@ func baseEnv(t *testing.T) {
 	t.Setenv("PUBLIC_URL", "https://msgraph-mcp.example.com")
 }
 
-func TestAuthBypassesAreRefusedOutsideDevelopment(t *testing.T) {
-	bypasses := []string{"DISABLE_AUTH"}
-	deployed := []string{"production", "prod", "staging"}
+func TestDisabledAuthModeIsRefusedOutsideDevelopment(t *testing.T) {
+	for _, environment := range []string{"production", "prod", "staging"} {
+		t.Run(environment, func(t *testing.T) {
+			baseEnv(t)
+			t.Setenv("ENVIRONMENT", environment)
+			t.Setenv("AUTH_MODE", "disabled")
 
-	for _, bypass := range bypasses {
-		for _, environment := range deployed {
-			t.Run(bypass+"/"+environment, func(t *testing.T) {
-				baseEnv(t)
-				t.Setenv("ENVIRONMENT", environment)
-				t.Setenv(bypass, "true")
-
-				if _, err := Load(); err == nil {
-					t.Fatalf("%s=true was accepted with ENVIRONMENT=%s", bypass, environment)
-				}
-			})
-		}
+			if _, err := Load(); err == nil {
+				t.Fatalf("AUTH_MODE=disabled was accepted with ENVIRONMENT=%s", environment)
+			}
+		})
 	}
 }
 
-func TestAuthBypassesAreAllowedInDevelopment(t *testing.T) {
+func TestDisabledAuthModeIsAllowedInDevelopment(t *testing.T) {
 	for _, environment := range []string{"development", "dev"} {
 		t.Run(environment, func(t *testing.T) {
 			baseEnv(t)
 			t.Setenv("ENVIRONMENT", environment)
-			t.Setenv("DISABLE_AUTH", "true")
+			t.Setenv("AUTH_MODE", "disabled")
 
 			if _, err := Load(); err != nil {
 				t.Fatalf("development configuration was refused: %v", err)
+			}
+		})
+	}
+}
+
+func TestUnknownAuthModeIsRefused(t *testing.T) {
+	baseEnv(t)
+	t.Setenv("AUTH_MODE", "trust_me")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("an unrecognised AUTH_MODE was accepted")
+	}
+}
+
+// Verifying an assertion without constraining its audience would accept any
+// assertion the tenant ever issued, for any application, as proof of identity.
+func TestVerifiedIdentityModeRequiresAudiences(t *testing.T) {
+	baseEnv(t)
+	t.Setenv("AUTH_MODE", "verified_identity")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("verified_identity was accepted with no IDENTITY_AUDIENCES")
+	}
+
+	t.Setenv("IDENTITY_AUDIENCES", "55555555-5555-5555-5555-555555555555")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("verified_identity with an audience was refused: %v", err)
+	}
+	if len(cfg.IdentityAudiences) != 1 {
+		t.Fatalf("expected one audience, got %v", cfg.IdentityAudiences)
+	}
+}
+
+func TestIdentityAudiencesAreCommaSeparated(t *testing.T) {
+	baseEnv(t)
+	t.Setenv("AUTH_MODE", "verified_identity")
+	t.Setenv("IDENTITY_AUDIENCES", "aaaa,api://bbbb,cccc")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.IdentityAudiences) != 3 || cfg.IdentityAudiences[1] != "api://bbbb" {
+		t.Fatalf("audiences parsed as %v", cfg.IdentityAudiences)
+	}
+}
+
+func TestJWKSIntervalsMustBePositive(t *testing.T) {
+	for _, name := range []string{"JWKS_REFRESH_INTERVAL", "JWKS_MIN_REFRESH_INTERVAL"} {
+		t.Run(name, func(t *testing.T) {
+			baseEnv(t)
+			t.Setenv(name, "0s")
+
+			if _, err := Load(); err == nil {
+				t.Fatalf("%s=0s was accepted", name)
 			}
 		})
 	}

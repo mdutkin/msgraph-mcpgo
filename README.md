@@ -8,6 +8,7 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 
 - MCP Streamable HTTP transport with tools and resources
 - Forwards the caller's Microsoft Graph token; holds no credential of its own
+- Verifies an Entra identity assertion against cached tenant signing keys, with rotation handled on demand
 - Outlook email search, reading, attachments, and sending
 - Calendar events, availability lookup, and Teams meeting scheduling
 - Teams chat retrieval and sending
@@ -19,28 +20,63 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 
     MCP client
         |
-        | Microsoft Graph access token + JSON-RPC
+        | Authorization:        Graph access token   (forwarded)
+        | X-Identity-Assertion: Entra ID token       (verified, then discarded)
         v
     msgraph-mcpgo          (holds no credential)
-        |
-        | the same token, forwarded unchanged
+        |                      \
+        | the Graph token,      `--> Entra JWKS: verify the assertion's signature
+        | forwarded unchanged
         v
     Microsoft Graph        (decides what the token may do)
 
-The client sends a **Microsoft Graph access token** to /mcp over the MCP
-Streamable HTTP transport. The server inspects its shape, audience, tenant and
-expiry, then forwards it to Microsoft Graph unchanged.
-
-This server holds no client secret, performs no on-behalf-of exchange and has no
+The server holds no client secret, performs no on-behalf-of exchange and has no
 delegated permission of its own, so it cannot act for a user who is not
 currently calling it. What a caller may read or write is decided entirely by the
-delegated permissions inside their own token, and enforced by Microsoft Graph.
-No caller state is held, so any task can serve any request.
+delegated permissions inside their own Graph token, and enforced by Microsoft
+Graph. No caller state is held, so any task can serve any request.
 
-The token signature is deliberately not verified. Microsoft does not publish
-signing keys for tokens issued to the Graph resource and states that a resource
-other than the intended audience must not validate them. The local checks are
-fail-fast diagnostics and audit metadata; Graph is the authority.
+### Why there are two credentials
+
+The Graph token cannot be verified here, and that is not a limitation of this
+implementation. Microsoft does not publish signing keys for tokens issued to its
+own APIs, and documents that a resource must only validate tokens whose audience
+is itself:
+
+> APIs and web applications must only validate tokens that have an `aud` claim
+> that matches the application. [...] For example, you can't validate tokens for
+> Microsoft Graph according to these rules due to their proprietary format.
+
+So the identity is carried by a second credential that *can* be verified: an
+Entra token issued for a registered application. Its signature is checked
+against the tenant's published keys, and the verified identity is what reaches
+the audit log and the rate limiter. The Graph token stays an opaque credential
+that is forwarded and never trusted for identity.
+
+Both credentials must describe the same user and the same directory. That
+binding is not cryptographic — nothing in the assertion commits to the Graph
+token — so a caller could in principle pair a valid assertion with another
+user's Graph token. Doing so gains them nothing, because holding that token
+already lets them call Microsoft Graph directly without this server. What the
+check buys is audit integrity: a Graph call cannot be recorded under an identity
+that does not match the credential used to make it.
+
+Set `AUTH_MODE=graph_passthrough` to run with the Graph token alone. Nothing is
+then signature-verified and the recorded identity is whatever the token claims,
+which is adequate only where the caller is already trusted.
+
+### Signing keys
+
+In `verified_identity` mode the tenant's signing keys are discovered through the
+OpenID configuration document and cached. They are re-read on
+`JWKS_REFRESH_INTERVAL`, and additionally re-read on demand whenever an
+assertion arrives signed by a key the cache has not seen, which is what makes a
+key rotation take effect at once instead of at the next interval.
+
+On-demand reads are rate limited by `JWKS_MIN_REFRESH_INTERVAL`, so a caller
+sending unrecognised key identifiers cannot turn this service into a request
+amplifier against Entra. The scheduled and on-demand budgets are separate: a
+startup fetch does not consume the on-demand allowance.
 
 ## Requirements
 
@@ -82,7 +118,8 @@ on-behalf-of design would receive, is refused with an explanation.
 ### LibreChat / CorningGPT
 
 LibreChat resolves `{{LIBRECHAT_GRAPH_ACCESS_TOKEN}}` into a Graph token for the
-signed-in user, so the client configuration is:
+signed-in user and `{{LIBRECHAT_OPENID_ID_TOKEN}}` into that user's Entra ID
+token, so the client configuration is:
 
     mcpServers:
       msgraph:
@@ -90,6 +127,16 @@ signed-in user, so the client configuration is:
         url: "https://msgraph-mcp.example.com/mcp"
         headers:
           Authorization: "Bearer {{LIBRECHAT_GRAPH_ACCESS_TOKEN}}"
+          X-Identity-Assertion: "{{LIBRECHAT_OPENID_ID_TOKEN}}"
+
+Set `IDENTITY_AUDIENCES` to the LibreChat application's client ID, which is the
+`aud` of that ID token. LibreChat refuses to resolve an expired ID token, so an
+assertion that reaches this server is one LibreChat considered current.
+
+To have the assertion issued for *this* server instead, register it as an API in
+Entra, have the client request that scope, and put its identifier — for example
+`api://<client-id>` — in `IDENTITY_AUDIENCES`. Verification is identical; only
+which registration mints the assertion differs.
 
 LibreChat requests `https://graph.microsoft.com/.default`, which returns only
 the permissions already consented on the LibreChat app registration. A tool that
@@ -152,6 +199,12 @@ secret is optional and the same Dockerfile builds unchanged without it.
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | AZURE_TENANT_ID | Yes | — | Microsoft Entra tenant ID. A token from another directory is refused |
+| AUTH_MODE | No | graph_passthrough | `verified_identity`, `graph_passthrough` or `disabled`. See Architecture |
+| IDENTITY_AUDIENCES | When verifying | — | Comma-separated accepted `aud` values of the assertion, one per application allowed to vouch for a caller |
+| IDENTITY_ASSERTION_HEADER | No | X-Identity-Assertion | Header carrying the verifiable Entra token |
+| JWKS_REFRESH_INTERVAL | No | 12h | How often the tenant's signing keys are re-read |
+| JWKS_MIN_REFRESH_INTERVAL | No | 5m | Floor between on-demand key reads triggered by an unknown key identifier |
+| ENTRA_DISCOVERY_URL | No | — | Overrides the OpenID configuration URL. Needed only for a sovereign cloud |
 | ENVIRONMENT | No | production | Runtime environment; development enables development logging |
 | SERVER_PORT | No | 8080 | HTTP server port |
 | PUBLIC_URL | No | http://localhost:8080 | Base URL clients reach. Published as the OAuth protected resource identifier and in every 401 challenge |
@@ -169,10 +222,10 @@ secret is optional and the same Dockerfile builds unchanged without it.
 | RATE_LIMIT_PER_USER | No | 100 | Sustained requests per minute per user, per task. 0 disables throttling |
 | RATE_LIMIT_BURST | No | 0 | Back-to-back requests allowed before the sustained rate applies. 0 selects a quarter of RATE_LIMIT_PER_USER, floor 5 |
 | RATE_LIMIT_IDLE_TTL | No | 15m | Retention for an unused per-user bucket |
-| DISABLE_AUTH | No | false | Development-only: accept any bearer token with no inspection |
 
-DISABLE_AUTH is refused at startup unless ENVIRONMENT names a development
-environment (`development` or `dev`). The
+
+`AUTH_MODE=disabled` is refused at startup unless ENVIRONMENT names a
+development environment (`development` or `dev`). The
 server exits with a non-zero status and an explanation rather than starting in
 a weakened state. Outside development, PUBLIC_URL must also be an absolute
 https URL that is not a loopback address, because it is published to clients as

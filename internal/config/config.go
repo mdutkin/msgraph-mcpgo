@@ -99,11 +99,51 @@ type Config struct {
 	// RateLimitIdleTTL is how long an unused per-user bucket is retained.
 	RateLimitIdleTTL time.Duration `env:"RATE_LIMIT_IDLE_TTL" envDefault:"15m"`
 
-	// Testing
+	// Authentication
 	//
-	// DisableAuth accepts any bearer token with no inspection. Validate
-	// rejects it outside a development environment; see that method for why.
-	DisableAuth bool `env:"DISABLE_AUTH" envDefault:"false"`
+	// AuthMode selects how a caller is authenticated:
+	//
+	//   verified_identity  The caller sends a Graph token in Authorization and
+	//                      an Entra identity assertion in IdentityAssertionHeader.
+	//                      The assertion's signature is verified against the
+	//                      tenant's published keys, so the identity in the audit
+	//                      log is backed by Entra rather than by a claim the
+	//                      caller controls. Requires IdentityAudiences.
+	//
+	//   graph_passthrough  The caller sends only a Graph token. It is inspected
+	//                      but no signature is verified, because Microsoft does
+	//                      not publish signing keys for tokens issued to its own
+	//                      APIs. The recorded identity is the one the token
+	//                      claims.
+	//
+	//   disabled           No inspection at all. Development only; Validate
+	//                      refuses it elsewhere.
+	AuthMode string `env:"AUTH_MODE" envDefault:"graph_passthrough"`
+
+	// IdentityAssertionHeader carries the verifiable Entra token in
+	// verified_identity mode.
+	IdentityAssertionHeader string `env:"IDENTITY_ASSERTION_HEADER" envDefault:"X-Identity-Assertion"`
+
+	// IdentityAudiences are the accepted "aud" values of the assertion, one per
+	// application allowed to vouch for a caller. For LibreChat's OpenID ID
+	// token this is the LibreChat client ID.
+	IdentityAudiences []string `env:"IDENTITY_AUDIENCES" envSeparator:","`
+
+	// EntraDiscoveryURL overrides the OpenID configuration URL the signing keys
+	// are discovered through. Leave empty for the public cloud. A sovereign
+	// cloud needs its own authority, for example
+	// https://login.microsoftonline.us/<tenant>/v2.0/.well-known/openid-configuration
+	EntraDiscoveryURL string `env:"ENTRA_DISCOVERY_URL"`
+
+	// JWKSRefreshInterval is how often Entra's signing keys are re-read in the
+	// background. Microsoft's guidance is at least daily.
+	JWKSRefreshInterval time.Duration `env:"JWKS_REFRESH_INTERVAL" envDefault:"12h"`
+
+	// JWKSMinRefreshInterval is the floor between on-demand key refreshes
+	// triggered by an unrecognised key identifier. It stops a caller sending
+	// random key identifiers from turning this service into a request
+	// amplifier against Entra.
+	JWKSMinRefreshInterval time.Duration `env:"JWKS_MIN_REFRESH_INTERVAL" envDefault:"5m"`
 }
 
 // Load loads configuration from environment variables
@@ -161,13 +201,36 @@ func (c *Config) Validate() error {
 			c.Environment))
 	}
 
-	if !c.IsDevelopment() {
-		if c.DisableAuth {
+	switch c.AuthMode {
+	case "verified_identity":
+		if len(c.IdentityAudiences) == 0 {
+			problems = append(problems, "IDENTITY_AUDIENCES is required when AUTH_MODE=verified_identity: "+
+				"without it any assertion the tenant ever issued, for any application, would be "+
+				"accepted as proof of identity here")
+		}
+		if c.IdentityAssertionHeader == "" {
+			problems = append(problems, "IDENTITY_ASSERTION_HEADER must not be empty when AUTH_MODE=verified_identity")
+		}
+	case "graph_passthrough":
+		// Nothing further to check.
+	case "disabled":
+		if !c.IsDevelopment() {
 			problems = append(problems, fmt.Sprintf(
-				"DISABLE_AUTH=true is refused when ENVIRONMENT=%q: it accepts any bearer token "+
+				"AUTH_MODE=disabled is refused when ENVIRONMENT=%q: it accepts any bearer token "+
 					"with no inspection, so a request cannot be attributed to a user in the "+
 					"audit log and the rate limiter cannot tell callers apart", c.Environment))
 		}
+	default:
+		problems = append(problems, fmt.Sprintf(
+			"AUTH_MODE=%q is not recognised; use verified_identity, graph_passthrough or disabled",
+			c.AuthMode))
+	}
+
+	if c.JWKSRefreshInterval <= 0 {
+		problems = append(problems, fmt.Sprintf("JWKS_REFRESH_INTERVAL=%s must be positive", c.JWKSRefreshInterval))
+	}
+	if c.JWKSMinRefreshInterval <= 0 {
+		problems = append(problems, fmt.Sprintf("JWKS_MIN_REFRESH_INTERVAL=%s must be positive", c.JWKSMinRefreshInterval))
 	}
 
 	problems = append(problems, c.validatePublicURL()...)
