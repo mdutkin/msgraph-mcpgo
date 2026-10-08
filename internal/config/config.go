@@ -41,8 +41,26 @@ type Config struct {
 	AzureClientID     string `env:"AZURE_CLIENT_ID,required"`
 	AzureClientSecret string `env:"AZURE_CLIENT_SECRET,required"`
 
+	// MaxRequestBytes bounds an MCP request body. The transport reads a body
+	// in full, so without a bound one request can allocate as much memory as
+	// the sender transmits. The default admits an upload_file call carrying a
+	// file of roughly 24 MiB after base64 expansion.
+	MaxRequestBytes int64 `env:"MAX_REQUEST_BYTES" envDefault:"33554432"`
+
 	// Timeouts
 	GraphTimeout time.Duration `env:"GRAPH_TIMEOUT" envDefault:"60s"`
+
+	// ReadHeaderTimeout bounds how long a client may take to send request
+	// headers. It is the defence against a slow-header connection holding a
+	// goroutine and a load balancer slot open indefinitely.
+	ReadHeaderTimeout time.Duration `env:"READ_HEADER_TIMEOUT" envDefault:"10s"`
+
+	// ReadTimeout bounds the whole request read, WriteTimeout the response
+	// write. WriteTimeout must exceed GraphTimeout, otherwise a slow but
+	// successful Microsoft Graph call is cut off after the work is done.
+	ReadTimeout  time.Duration `env:"READ_TIMEOUT" envDefault:"30s"`
+	WriteTimeout time.Duration `env:"WRITE_TIMEOUT" envDefault:"120s"`
+	IdleTimeout  time.Duration `env:"IDLE_TIMEOUT" envDefault:"120s"`
 
 	// Caching
 	TokenCacheTTL time.Duration `env:"TOKEN_CACHE_TTL" envDefault:"5m"`
@@ -140,6 +158,20 @@ func (c *Config) Validate() error {
 	}
 
 	problems = append(problems, c.validatePublicURL()...)
+
+	if c.MaxRequestBytes <= 0 {
+		problems = append(problems, fmt.Sprintf(
+			"MAX_REQUEST_BYTES=%d must be positive", c.MaxRequestBytes))
+	}
+
+	// A response write deadline shorter than the Graph operation timeout cuts
+	// off a slow but successful call after the work has already been done and
+	// the Graph side effect has already happened.
+	if c.WriteTimeout <= c.GraphTimeout {
+		problems = append(problems, fmt.Sprintf(
+			"WRITE_TIMEOUT=%s must exceed GRAPH_TIMEOUT=%s, otherwise a slow Microsoft Graph call "+
+				"is cut off after it has already taken effect", c.WriteTimeout, c.GraphTimeout))
+	}
 
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid configuration:\n  - %s", strings.Join(problems, "\n  - "))

@@ -108,6 +108,11 @@ Default endpoints:
 | MCP_STATELESS | No | true | Keep the Streamable HTTP transport free of per-session state. Required when more than one task serves a load balancer target group |
 | METRICS_PORT | No | 9090 | Prometheus metrics port |
 | GRAPH_TIMEOUT | No | 60s | Microsoft Graph operation timeout |
+| MAX_REQUEST_BYTES | No | 33554432 | Maximum MCP request body. 32 MiB admits an upload_file call carrying roughly 24 MiB after base64 expansion |
+| READ_HEADER_TIMEOUT | No | 10s | Deadline for a client to send request headers |
+| READ_TIMEOUT | No | 30s | Deadline for the whole request read |
+| WRITE_TIMEOUT | No | 120s | Deadline for the response write. Must exceed GRAPH_TIMEOUT |
+| IDLE_TIMEOUT | No | 120s | Keep-alive idle deadline |
 | TOKEN_CACHE_TTL | No | 5m | Token cache lifetime |
 | JWKS_CACHE_TTL | No | 24h | Entra JWKS cache lifetime |
 | LOG_LEVEL | No | info | Structured logging level |

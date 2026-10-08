@@ -15,6 +15,7 @@ import (
 	"github.com/fnfbraga/msgraph-mcpgo/internal/auth"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/config"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/health"
+	"github.com/fnfbraga/msgraph-mcpgo/internal/httpmw"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/mcp"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/observability"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/ratelimit"
@@ -198,8 +199,14 @@ func main() {
 
 	// MCP endpoint. The Streamable HTTP transport handles POST, GET and
 	// DELETE itself, so the mux must not filter by method.
-	mux.Handle(mcp.DefaultEndpointPath,
-		authMiddleware.Handler(userLimiter.Handler(mcpServer.Handler())))
+	// Order matters. The body limit is outermost so an oversized payload is
+	// stopped before any work is done on it; authentication comes next so no
+	// unauthenticated request reaches the limiter or the transport; throttling
+	// is innermost of the three because it keys on the authenticated identity.
+	mux.Handle(mcp.DefaultEndpointPath, httpmw.LimitRequestBody(
+		cfg.MaxRequestBytes, &logger,
+		authMiddleware.Handler(userLimiter.Handler(mcpServer.Handler())),
+	))
 
 	// OAuth 2.0 Protected Resource Metadata (RFC 9728). This document is
 	// intentionally public: it is how an MCP client that receives a 401
@@ -228,17 +235,19 @@ func main() {
 
 	// Create HTTP server
 	httpServer := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.ServerPort),
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 90 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:              fmt.Sprintf(":%d", cfg.ServerPort),
+		Handler:           mux,
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
 	}
 
 	// Start metrics server
 	metricsServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.MetricsPort),
-		Handler: promhttp.Handler(),
+		Addr:              fmt.Sprintf(":%d", cfg.MetricsPort),
+		Handler:           promhttp.Handler(),
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 	}
 
 	go func() {
