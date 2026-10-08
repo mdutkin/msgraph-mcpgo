@@ -7,8 +7,6 @@ import (
 
 func TestLoadWithoutOptionalProviderConfiguration(t *testing.T) {
 	t.Setenv("AZURE_TENANT_ID", "tenant-id")
-	t.Setenv("AZURE_CLIENT_ID", "client-id")
-	t.Setenv("AZURE_CLIENT_SECRET", "client-secret")
 	t.Setenv("GRAPH_TIMEOUT", "45s")
 	// PUBLIC_URL defaults to a loopback address, which Validate refuses
 	// outside a development environment.
@@ -19,7 +17,7 @@ func TestLoadWithoutOptionalProviderConfiguration(t *testing.T) {
 		t.Fatalf("Load() returned an error without optional provider configuration: %v", err)
 	}
 
-	if cfg.AzureTenantID != "tenant-id" || cfg.AzureClientID != "client-id" || cfg.AzureClientSecret != "client-secret" {
+	if cfg.AzureTenantID != "tenant-id" {
 		t.Fatalf("Azure configuration was not loaded correctly: %+v", cfg)
 	}
 	if cfg.GraphTimeout != 45*time.Second {
@@ -32,13 +30,11 @@ func TestLoadWithoutOptionalProviderConfiguration(t *testing.T) {
 func baseEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("AZURE_TENANT_ID", "tenant-id")
-	t.Setenv("AZURE_CLIENT_ID", "client-id")
-	t.Setenv("AZURE_CLIENT_SECRET", "client-secret")
 	t.Setenv("PUBLIC_URL", "https://msgraph-mcp.example.com")
 }
 
 func TestAuthBypassesAreRefusedOutsideDevelopment(t *testing.T) {
-	bypasses := []string{"DISABLE_AUTH", "SKIP_TOKEN_VALIDATION"}
+	bypasses := []string{"DISABLE_AUTH"}
 	deployed := []string{"production", "prod", "staging"}
 
 	for _, bypass := range bypasses {
@@ -62,7 +58,6 @@ func TestAuthBypassesAreAllowedInDevelopment(t *testing.T) {
 			baseEnv(t)
 			t.Setenv("ENVIRONMENT", environment)
 			t.Setenv("DISABLE_AUTH", "true")
-			t.Setenv("SKIP_TOKEN_VALIDATION", "true")
 
 			if _, err := Load(); err != nil {
 				t.Fatalf("development configuration was refused: %v", err)

@@ -22,30 +22,22 @@ import (
 // Server is the MCP server implementation
 type Server struct {
 	mcpServer           *server.MCPServer
-	tokenValidator      *auth.TokenValidator
-	oboExchanger        *auth.OBOExchanger
 	graphClientConfig   msgraph.ClientConfig
 	attachmentExtractor *attachments.Extractor
 	circuitBreaker      *gobreaker.CircuitBreaker
 	logger              *zerolog.Logger
 	metrics             *observability.Metrics
-	disableAuth         bool
-	skipTokenValidation bool
 	stateless           bool
 	endpointPath        string
 }
 
 // ServerConfig holds configuration for creating an MCP server
 type ServerConfig struct {
-	TokenValidator      *auth.TokenValidator
-	OBOExchanger        *auth.OBOExchanger
 	AttachmentExtractor *attachments.Extractor
 	CircuitBreaker      *gobreaker.CircuitBreaker
 	Logger              *zerolog.Logger
 	Metrics             *observability.Metrics
 	GraphTimeout        time.Duration
-	DisableAuth         bool
-	SkipTokenValidation bool
 
 	// Policy decides which tools and resources are registered. A nil policy
 	// registers everything.
@@ -70,14 +62,10 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	s := &Server{
-		tokenValidator:      cfg.TokenValidator,
-		oboExchanger:        cfg.OBOExchanger,
 		attachmentExtractor: cfg.AttachmentExtractor,
 		circuitBreaker:      cfg.CircuitBreaker,
 		logger:              cfg.Logger,
 		metrics:             cfg.Metrics,
-		disableAuth:         cfg.DisableAuth,
-		skipTokenValidation: cfg.SkipTokenValidation,
 		stateless:           cfg.Stateless,
 		endpointPath:        cfg.EndpointPath,
 		graphClientConfig: msgraph.ClientConfig{
@@ -278,52 +266,25 @@ func (s *Server) Handler(opts ...server.StreamableHTTPOption) http.Handler {
 	return server.NewStreamableHTTPServer(s.mcpServer, append(base, opts...)...)
 }
 
-// getGraphClient retrieves or creates a Graph client from context
+// getGraphClient builds a Microsoft Graph client for the calling user.
+//
+// The caller's Graph access token is forwarded unchanged. There is no
+// on-behalf-of exchange and no credential of this service involved, so the
+// client can do exactly what the caller's own delegated permissions allow and
+// nothing more. Graph enforces that, which is why the server needs no client
+// secret and cannot act for a user who is not currently calling it.
+//
+// A client is built per request rather than cached. The token is the caller's,
+// so a shared client would serve one user's credential to another.
 func (s *Server) getGraphClient(ctx context.Context) (*msgraph.Client, error) {
 	// The token is placed in the context by the authentication middleware.
 	// Its absence means the request bypassed authentication, which is a bug
 	// rather than an anonymous caller, so it fails closed.
-	incomingToken, ok := auth.TokenFromContext(ctx)
+	graphToken, ok := auth.TokenFromContext(ctx)
 	if !ok {
 		return nil, apperrors.NewTokenValidationError(fmt.Errorf("no caller credential in context"))
 	}
 
-	var graphToken string
-
-	if s.disableAuth {
-		// Dev mode: still need OBO exchange to get a Graph-scoped token
-		s.logger.Info().Msg("Dev mode: performing OBO exchange for Graph token")
-		var err error
-		graphToken, err = s.oboExchanger.ExchangeForGraphToken(ctx, incomingToken)
-		if err != nil {
-			s.logger.Error().Err(err).Msg("Dev mode: OBO exchange failed")
-			return nil, fmt.Errorf("failed to exchange token for Graph access (dev mode): %w", err)
-		}
-		s.logger.Info().Int("graph_token_len", len(graphToken)).Msg("Dev mode: OBO exchange succeeded")
-	} else if s.skipTokenValidation {
-		// When skipTokenValidation is on, check if caller sent a Graph token (wrong audience for OBO).
-		// If so, use it directly so the app works without changing the client; Graph calls use this token as-is (app context).
-		claims, err := s.tokenValidator.ParseClaimsWithoutVerification(incomingToken)
-		if err == nil && isGraphAudience(claims.Audience) {
-			s.logger.Info().Str("aud", claims.Audience).Msg("Using incoming Graph token directly (caller sent Graph token; no OBO)")
-			graphToken = incomingToken
-		} else {
-			var err error
-			graphToken, err = s.oboExchanger.ExchangeForGraphToken(ctx, incomingToken)
-			if err != nil {
-				return nil, fmt.Errorf("failed to exchange token for Graph access: %w", err)
-			}
-		}
-	} else {
-		// Production: exchange incoming MCP app token for a Graph token via OBO
-		var err error
-		graphToken, err = s.oboExchanger.ExchangeForGraphToken(ctx, incomingToken)
-		if err != nil {
-			return nil, fmt.Errorf("failed to exchange token for Graph access: %w", err)
-		}
-	}
-
-	// Create Graph client with the token
 	cfg := s.graphClientConfig
 	cfg.Token = graphToken
 
@@ -333,9 +294,4 @@ func (s *Server) getGraphClient(ctx context.Context) (*msgraph.Client, error) {
 	}
 
 	return client, nil
-}
-
-// isGraphAudience returns true if the token audience is MS Graph (so it can be used as Graph token directly).
-func isGraphAudience(aud string) bool {
-	return aud == "https://graph.microsoft.com" || aud == "00000003-0000-0000-c000-000000000000"
 }

@@ -7,7 +7,7 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 ## Features
 
 - MCP Streamable HTTP transport with tools and resources
-- Microsoft Entra ID token validation and OAuth On-Behalf-Of exchange
+- Forwards the caller's Microsoft Graph token; holds no credential of its own
 - Outlook email search, reading, attachments, and sending
 - Calendar events, availability lookup, and Teams meeting scheduling
 - Teams chat retrieval and sending
@@ -19,18 +19,28 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 
     MCP client
         |
-        | Bearer token + JSON-RPC
+        | Microsoft Graph access token + JSON-RPC
         v
-    msgraph-mcpgo
+    msgraph-mcpgo          (holds no credential)
         |
-        | Entra validation + OAuth OBO
+        | the same token, forwarded unchanged
         v
-    Microsoft Graph
+    Microsoft Graph        (decides what the token may do)
 
-The client sends a Microsoft Entra ID access token to /mcp over the MCP
-Streamable HTTP transport. The server validates it, exchanges it through the OBO
-flow for a delegated Microsoft Graph token, and invokes Graph APIs as that user.
-No caller state is held on the server, so any task can serve any request.
+The client sends a **Microsoft Graph access token** to /mcp over the MCP
+Streamable HTTP transport. The server inspects its shape, audience, tenant and
+expiry, then forwards it to Microsoft Graph unchanged.
+
+This server holds no client secret, performs no on-behalf-of exchange and has no
+delegated permission of its own, so it cannot act for a user who is not
+currently calling it. What a caller may read or write is decided entirely by the
+delegated permissions inside their own token, and enforced by Microsoft Graph.
+No caller state is held, so any task can serve any request.
+
+The token signature is deliberately not verified. Microsoft does not publish
+signing keys for tokens issued to the Graph resource and states that a resource
+other than the intended audience must not validate them. The local checks are
+fail-fast diagnostics and audit metadata; Graph is the authority.
 
 ## Requirements
 
@@ -40,9 +50,12 @@ No caller state is held on the server, so any task can serve any request.
 
 ## Microsoft Entra ID setup
 
-Create an app registration and configure it for the access-token flow used by your MCP client. Add only the delegated Microsoft Graph permissions required by your deployment.
+This server needs **no app registration of its own**. The calling application
+obtains the Graph token, so the delegated Microsoft Graph permissions are
+consented on *that* application's registration.
 
-The current OBO implementation requests:
+Add only the permissions your exposed tools need, and withhold the matching
+tools in `tools.yaml` for anything you do not consent. The full tool set uses:
 
 - User.Read
 - User.Read.All
@@ -57,9 +70,31 @@ The current OBO implementation requests:
 - OnlineMeetings.Read
 - OnlineMeetingTranscript.Read.All
 - Sites.Read.All
-- offline_access
 
-Some permissions require tenant administrator consent. The token sent to /mcp must be issued by the configured tenant and use AZURE_CLIENT_ID as its expected audience. The app registration also needs a client secret for OBO exchange.
+Some permissions require tenant administrator consent.
+
+The token sent to /mcp must have Microsoft Graph as its audience
+(`https://graph.microsoft.com`, or the v1.0 equivalent
+`00000003-0000-0000-c000-000000000000`) and must be issued by the tenant named
+in `AZURE_TENANT_ID`. A token whose audience is this server, which is what an
+on-behalf-of design would receive, is refused with an explanation.
+
+### LibreChat / CorningGPT
+
+LibreChat resolves `{{LIBRECHAT_GRAPH_ACCESS_TOKEN}}` into a Graph token for the
+signed-in user, so the client configuration is:
+
+    mcpServers:
+      msgraph:
+        type: streamable-http
+        url: "https://msgraph-mcp.example.com/mcp"
+        headers:
+          Authorization: "Bearer {{LIBRECHAT_GRAPH_ACCESS_TOKEN}}"
+
+LibreChat requests `https://graph.microsoft.com/.default`, which returns only
+the permissions already consented on the LibreChat app registration. A tool that
+needs a permission missing from that registration will fail with a Graph
+authorization error, not with a 401 from this server.
 
 ## Quick start
 
@@ -69,13 +104,9 @@ Clone and configure the project:
     cd msgraph-mcpgo
     cp .env.example .env
 
-Set at least these values in .env:
+Set at least this value in .env:
 
     AZURE_TENANT_ID=your-tenant-id
-    AZURE_CLIENT_ID=your-client-id
-    AZURE_CLIENT_SECRET=your-client-secret
-
-AZURE_CLIENT_SECRET is required by the application even though it is not currently listed in .env.example.
 
 Run the server:
 
@@ -120,9 +151,7 @@ secret is optional and the same Dockerfile builds unchanged without it.
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| AZURE_TENANT_ID | Yes | — | Microsoft Entra tenant ID |
-| AZURE_CLIENT_ID | Yes | — | App registration client ID and expected token audience |
-| AZURE_CLIENT_SECRET | Yes | — | App secret used for OBO exchange |
+| AZURE_TENANT_ID | Yes | — | Microsoft Entra tenant ID. A token from another directory is refused |
 | ENVIRONMENT | No | production | Runtime environment; development enables development logging |
 | SERVER_PORT | No | 8080 | HTTP server port |
 | PUBLIC_URL | No | http://localhost:8080 | Externally reachable base URL. Published as the OAuth protected resource identifier and in every 401 challenge |
@@ -135,17 +164,14 @@ secret is optional and the same Dockerfile builds unchanged without it.
 | READ_TIMEOUT | No | 30s | Deadline for the whole request read |
 | WRITE_TIMEOUT | No | 120s | Deadline for the response write. Must exceed GRAPH_TIMEOUT |
 | IDLE_TIMEOUT | No | 120s | Keep-alive idle deadline |
-| TOKEN_CACHE_TTL | No | 5m | Token cache lifetime |
-| JWKS_CACHE_TTL | No | 24h | Entra JWKS cache lifetime |
 | LOG_LEVEL | No | info | Structured logging level |
 | RATE_LIMIT_PER_USER | No | 100 | Sustained requests per minute per user, per task. 0 disables throttling |
 | RATE_LIMIT_BURST | No | 0 | Back-to-back requests allowed before the sustained rate applies. 0 selects a quarter of RATE_LIMIT_PER_USER, floor 5 |
 | RATE_LIMIT_IDLE_TTL | No | 15m | Retention for an unused per-user bucket |
-| DISABLE_AUTH | No | false | Development-only authentication bypass |
-| SKIP_TOKEN_VALIDATION | No | false | Skip local JWT verification; Graph still validates during OBO |
+| DISABLE_AUTH | No | false | Development-only: accept any bearer token with no inspection |
 
-DISABLE_AUTH and SKIP_TOKEN_VALIDATION are refused at startup unless
-ENVIRONMENT names a development environment (`development` or `dev`). The
+DISABLE_AUTH is refused at startup unless ENVIRONMENT names a development
+environment (`development` or `dev`). The
 server exits with a non-zero status and an explanation rather than starting in
 a weakened state. Outside development, PUBLIC_URL must also be an absolute
 https URL that is not a loopback address, because it is published to clients as

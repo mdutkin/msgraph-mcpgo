@@ -38,13 +38,20 @@ func registerDevConsole(mux *http.ServeMux, cfg *config.Config, logger *zerolog.
 
 	proxy := &devAuthProxy{
 		tenantID: cfg.AzureTenantID,
-		clientID: cfg.AzureClientID,
+		clientID: devConsoleClientID,
 		client:   &http.Client{Timeout: 30 * time.Second},
 		logger:   logger,
 	}
 	mux.HandleFunc("/auth/devicecode", proxy.deviceCode)
 	mux.HandleFunc("/auth/token", proxy.token)
 }
+
+// devConsoleClientID is the Microsoft-published "Microsoft Azure CLI" public
+// client. The device-code flow needs a client ID, and this server no longer has
+// one of its own because it holds no credential. Using a well-known public
+// client keeps the development console working without inventing an app
+// registration that would only exist to support it.
+const devConsoleClientID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
 
 // devAuthProxy forwards device-code requests to Microsoft Entra.
 type devAuthProxy struct {
@@ -55,9 +62,11 @@ type devAuthProxy struct {
 }
 
 func (p *devAuthProxy) deviceCode(w http.ResponseWriter, r *http.Request) {
+	// The console acquires a Microsoft Graph token directly, which is the
+	// same kind of credential LibreChat forwards in production.
 	scopes := r.FormValue("scope")
 	if scopes == "" {
-		scopes = fmt.Sprintf("api://%s/access_as_user offline_access", p.clientID)
+		scopes = "https://graph.microsoft.com/.default offline_access"
 	}
 
 	p.forward(w, r, "devicecode", url.Values{

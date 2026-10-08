@@ -59,25 +59,11 @@ func main() {
 	// Initialize metrics
 	metrics := observability.NewMetrics()
 
-	// Initialize JWKS cache
-	jwksCache := auth.NewJWKSCache(cfg.AzureTenantID, cfg.JWKSCacheTTL, &logger)
-
-	// Initialize token validator
-	tokenValidator := auth.NewTokenValidator(
-		cfg.AzureClientID,
-		cfg.AzureTenantID,
-		jwksCache,
-		&logger,
-		metrics,
-	)
-
-	// Initialize OBO exchanger for delegated Graph access
-	oboExchanger := auth.NewOBOExchanger(
-		cfg.AzureTenantID,
-		cfg.AzureClientID,
-		cfg.AzureClientSecret,
-		&logger,
-	)
+	// The caller presents a Microsoft Graph access token. It is inspected for
+	// shape, audience, tenant and expiry, then forwarded unchanged. No client
+	// secret and no on-behalf-of exchange are involved, so this process holds
+	// no credential and cannot act for a user who is not currently calling it.
+	graphTokenInspector := auth.NewGraphTokenInspector(cfg.AzureTenantID)
 
 	// Initialize circuit breaker for MS Graph
 	circuitBreaker := gobreaker.NewCircuitBreaker(gobreaker.Settings{
@@ -149,15 +135,11 @@ func main() {
 
 	// Initialize MCP server
 	mcpServer, err := mcp.NewServer(mcp.ServerConfig{
-		TokenValidator:      tokenValidator,
-		OBOExchanger:        oboExchanger,
 		AttachmentExtractor: attachments.New(),
 		CircuitBreaker:      circuitBreaker,
 		Logger:              &logger,
 		Metrics:             metrics,
 		GraphTimeout:        cfg.GraphTimeout,
-		DisableAuth:         cfg.DisableAuth,
-		SkipTokenValidation: cfg.SkipTokenValidation,
 		Policy:              policy,
 		Stateless:           cfg.MCPStateless,
 		EndpointPath:        mcp.DefaultEndpointPath,
@@ -167,22 +149,20 @@ func main() {
 	}
 
 	// Authentication is applied to every MCP request, discovery included.
-	validationMode := auth.ModeVerify
-	switch {
-	case cfg.DisableAuth:
+	validationMode := auth.ModeGraphPassthrough
+	if cfg.DisableAuth {
 		validationMode = auth.ModeDisabled
-	case cfg.SkipTokenValidation:
-		validationMode = auth.ModeSkipSignature
 	}
 
 	resourceIdentifier := strings.TrimSuffix(cfg.PublicURL, "/")
 	metadataPath := server.ProtectedResourceMetadataPath(resourceIdentifier)
 
 	authMiddleware, err := auth.NewMiddleware(auth.MiddlewareConfig{
-		Validator:           tokenValidator,
+		Inspector:           graphTokenInspector,
 		Mode:                validationMode,
 		ResourceMetadataURL: resourceIdentifier + metadataPath,
 		Logger:              &logger,
+		Metrics:             metrics,
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create authentication middleware")
@@ -228,7 +208,11 @@ func main() {
 			AuthorizationServers: []string{
 				fmt.Sprintf("https://login.microsoftonline.com/%s/v2.0", cfg.AzureTenantID),
 			},
-			ScopesSupported:        []string{fmt.Sprintf("api://%s/access_as_user", cfg.AzureClientID)},
+			// Clients obtain a Microsoft Graph token, not a token for this
+			// server, so the advertised scope is a Graph scope. The delegated
+			// permissions behind ".default" are whatever the calling
+			// application's own registration has consented.
+			ScopesSupported:        []string{"https://graph.microsoft.com/.default"},
 			BearerMethodsSupported: []string{"header"},
 			ResourceName:           "Microsoft Graph MCP Server",
 		},

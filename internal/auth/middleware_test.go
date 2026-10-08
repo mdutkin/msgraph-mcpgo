@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fnfbraga/msgraph-mcpgo/internal/observability"
 	"github.com/rs/zerolog"
 )
 
@@ -19,6 +20,7 @@ func testLogger() *zerolog.Logger {
 func newTestMiddleware(t *testing.T, mode ValidationMode) *Middleware {
 	t.Helper()
 	m, err := NewMiddleware(MiddlewareConfig{
+		Inspector:           NewGraphTokenInspector(testTenantID),
 		Mode:                mode,
 		ResourceMetadataURL: "https://mcp.example.com/.well-known/oauth-protected-resource",
 		Logger:              testLogger(),
@@ -192,13 +194,59 @@ func TestBearerToken(t *testing.T) {
 	}
 }
 
-func TestNewMiddlewareRequiresValidatorWhenVerifying(t *testing.T) {
-	for _, mode := range []ValidationMode{ModeVerify, ModeSkipSignature} {
-		if _, err := NewMiddleware(MiddlewareConfig{Mode: mode, Logger: testLogger()}); err == nil {
-			t.Errorf("mode %s accepted a nil validator", mode)
-		}
+func TestNewMiddlewareRequiresInspectorWhenInspecting(t *testing.T) {
+	if _, err := NewMiddleware(MiddlewareConfig{Mode: ModeGraphPassthrough, Logger: testLogger()}); err == nil {
+		t.Error("ModeGraphPassthrough accepted a nil inspector")
 	}
 	if _, err := NewMiddleware(MiddlewareConfig{Mode: ModeDisabled, Logger: testLogger()}); err != nil {
-		t.Errorf("ModeDisabled rejected a nil validator: %v", err)
+		t.Errorf("ModeDisabled rejected a nil inspector: %v", err)
+	}
+}
+
+// In the production mode a credential that is not a usable Graph token is
+// rejected before it reaches the transport.
+func TestPassthroughModeRejectsNonGraphToken(t *testing.T) {
+	m := newTestMiddleware(t, ModeGraphPassthrough)
+	reached := false
+
+	payload := graphPayload()
+	payload["aud"] = "api://44444444-4444-4444-4444-444444444444"
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+makeToken(t, payload))
+
+	rec := httptest.NewRecorder()
+	m.Handler(okHandler(&reached)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	if reached {
+		t.Fatal("a non-Graph token reached the transport")
+	}
+}
+
+// A valid forwarded Graph token reaches the transport with the caller's
+// identity and credential in the context.
+func TestPassthroughModeForwardsGraphToken(t *testing.T) {
+	m := newTestMiddleware(t, ModeGraphPassthrough)
+	token := makeToken(t, graphPayload())
+
+	var seenToken string
+	var seenUser string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenToken, _ = TokenFromContext(r.Context())
+		seenUser = observability.GetUserID(r.Context())
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+token)
+	m.Handler(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if seenToken != token {
+		t.Error("the credential was altered on the way to the transport")
+	}
+	if seenUser != "22222222-2222-2222-2222-222222222222" {
+		t.Errorf("user id not propagated: %q", seenUser)
 	}
 }

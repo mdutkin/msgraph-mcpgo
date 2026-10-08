@@ -17,14 +17,8 @@ type Metrics struct {
 	GraphAPICallTotal    *prometheus.CounterVec
 	GraphAPICallErrors   *prometheus.CounterVec
 
-	// Token validation metrics
-	TokenValidationTotal   *prometheus.CounterVec
-	TokenValidationErrors  *prometheus.CounterVec
-	TokenValidationLatency *prometheus.HistogramVec
-
-	// Cache metrics
-	CacheHits   *prometheus.CounterVec
-	CacheMisses *prometheus.CounterVec
+	// Token inspection metrics
+	TokenValidationTotal *prometheus.CounterVec
 
 	// Circuit breaker metrics
 	CircuitBreakerState *prometheus.GaugeVec
@@ -88,44 +82,13 @@ func NewMetrics() *Metrics {
 			[]string{"endpoint", "error_type"},
 		),
 
-		// Token validation metrics
+		// Token inspection metrics
 		TokenValidationTotal: promauto.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "token_validation_total",
-				Help: "Total number of token validations",
+				Name: "token_inspection_total",
+				Help: "Forwarded Graph token inspections, by outcome (accepted, rejected)",
 			},
 			[]string{"status"},
-		),
-		TokenValidationErrors: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "token_validation_errors_total",
-				Help: "Total number of token validation errors",
-			},
-			[]string{"error_type"},
-		),
-		TokenValidationLatency: promauto.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Name:    "token_validation_latency_seconds",
-				Help:    "Token validation latency in seconds",
-				Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1},
-			},
-			[]string{"cached"},
-		),
-
-		// Cache metrics
-		CacheHits: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "cache_hits_total",
-				Help: "Total number of cache hits",
-			},
-			[]string{"cache_type"},
-		),
-		CacheMisses: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "cache_misses_total",
-				Help: "Total number of cache misses",
-			},
-			[]string{"cache_type"},
 		),
 
 		// Circuit breaker metrics

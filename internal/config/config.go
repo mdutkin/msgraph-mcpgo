@@ -36,10 +36,14 @@ type Config struct {
 	// balancer target group, because session state lives in task memory.
 	MCPStateless bool `env:"MCP_STATELESS" envDefault:"true"`
 
-	// Azure AD / EntraID
-	AzureTenantID     string `env:"AZURE_TENANT_ID,required"`
-	AzureClientID     string `env:"AZURE_CLIENT_ID,required"`
-	AzureClientSecret string `env:"AZURE_CLIENT_SECRET,required"`
+	// Microsoft Entra ID
+	//
+	// Only the tenant is needed. This service forwards the caller's Microsoft
+	// Graph access token and holds no credential of its own, so there is no
+	// client ID to be an audience for and no client secret to exchange with.
+	// The tenant is used to reject a token from a different directory early
+	// and to name the authorization server in the published resource metadata.
+	AzureTenantID string `env:"AZURE_TENANT_ID,required"`
 
 	// MaxRequestBytes bounds an MCP request body. The transport reads a body
 	// in full, so without a bound one request can allocate as much memory as
@@ -61,10 +65,6 @@ type Config struct {
 	ReadTimeout  time.Duration `env:"READ_TIMEOUT" envDefault:"30s"`
 	WriteTimeout time.Duration `env:"WRITE_TIMEOUT" envDefault:"120s"`
 	IdleTimeout  time.Duration `env:"IDLE_TIMEOUT" envDefault:"120s"`
-
-	// Caching
-	TokenCacheTTL time.Duration `env:"TOKEN_CACHE_TTL" envDefault:"5m"`
-	JWKSCacheTTL  time.Duration `env:"JWKS_CACHE_TTL" envDefault:"24h"`
 
 	// Observability
 	LogLevel    string `env:"LOG_LEVEL" envDefault:"info"`
@@ -88,14 +88,9 @@ type Config struct {
 
 	// Testing
 	//
-	// DisableAuth and SkipTokenValidation are rejected outside a development
-	// environment by Validate. See that method for why.
+	// DisableAuth accepts any bearer token with no inspection. Validate
+	// rejects it outside a development environment; see that method for why.
 	DisableAuth bool `env:"DISABLE_AUTH" envDefault:"false"`
-
-	// SkipTokenValidation skips local JWT signature verification; token is still
-	// passed to MS Graph OBO, which validates it. Use when JWKS verification
-	// fails in some environments (e.g. PRD) but OBO succeeds.
-	SkipTokenValidation bool `env:"SKIP_TOKEN_VALIDATION" envDefault:"false"`
 }
 
 // Load loads configuration from environment variables
@@ -147,13 +142,8 @@ func (c *Config) Validate() error {
 		if c.DisableAuth {
 			problems = append(problems, fmt.Sprintf(
 				"DISABLE_AUTH=true is refused when ENVIRONMENT=%q: it accepts any bearer token "+
-					"and forwards it to Microsoft Graph without validation", c.Environment))
-		}
-		if c.SkipTokenValidation {
-			problems = append(problems, fmt.Sprintf(
-				"SKIP_TOKEN_VALIDATION=true is refused when ENVIRONMENT=%q: token signatures, "+
-					"audience and issuer are not verified locally, and the identity written to "+
-					"the audit log is taken from an unverified token", c.Environment))
+					"with no inspection, so a request cannot be attributed to a user in the "+
+					"audit log and the rate limiter cannot tell callers apart", c.Environment))
 		}
 	}
 
