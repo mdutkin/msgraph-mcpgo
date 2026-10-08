@@ -243,7 +243,7 @@ secret is optional and the same Dockerfile builds unchanged without it.
 | AUTH_MODE | No | graph_passthrough | `obo`, `verified_identity`, `graph_passthrough` or `disabled`. See Architecture |
 | AZURE_CLIENT_ID | When `obo` | — | This application. The audience the caller's token must name, and the client this service authenticates as |
 | AZURE_CLIENT_SECRET | When `obo` | — | Authenticates the exchange. Supply from a secret store; never logged |
-| GRAPH_SCOPES | No | the full tool set | Comma-separated delegated Graph permissions requested. The bound on what the client secret can obtain |
+| GRAPH_SCOPES | No | the full tool set | Comma-separated delegated Graph permissions requested. The bound on what the client secret can obtain. The single value `auto` derives the set from the tools the exposure policy exposes |
 | OBO_EXPIRY_MARGIN | No | 5m | How long before expiry a cached delegated token stops being served |
 | ENTRA_TOKEN_URL | No | — | Overrides the token endpoint. Needed only for a sovereign cloud |
 | IDENTITY_AUDIENCES | When verifying | — | Comma-separated accepted `aud` values of the assertion, one per application allowed to vouch for a caller |
@@ -324,6 +324,46 @@ them. Do not build with this tag for any shared or deployed environment: an
 open device-code proxy for a confidential client lets a caller start a flow for
 this application, persuade an employee to approve the code, and then collect a
 delegated token for that employee's mailbox.
+
+## Permissions each tool needs
+
+A tool exposed without its Microsoft Graph permission fails with a generic 403
+that names neither the tool nor the permission, which is indistinguishable from
+a bug. In `obo` mode the server therefore cross-checks the exposure policy
+against `GRAPH_SCOPES` at startup and logs one error per tool that cannot work:
+
+    Exposed tool cannot work: its Microsoft Graph permission is not in GRAPH_SCOPES
+      tool=search_emails missing_graph_scopes=["Mail.Read"]
+
+| Tools | Delegated Graph permission |
+| --- | --- |
+| search_emails, get_email_details, read_email, download_attachment | Mail.Read |
+| send_email | Mail.Send |
+| get_calendar_events | Calendars.Read |
+| get_user_availability | Calendars.Read.Shared |
+| schedule_meeting | Calendars.ReadWrite |
+| list_chats, get_chat_messages | Chat.Read |
+| send_teams_message | ChatMessage.Send |
+| get_meeting_transcript | OnlineMeetings.Read + OnlineMeetingTranscript.Read.All |
+| list_recent_files, extract_file_content | Files.Read.All |
+| upload_file | Files.ReadWrite |
+| search_sharepoint | Files.Read.All + Sites.Read.All |
+| list_sharepoint_drives, get_sharepoint_page_content | Sites.Read.All |
+| search_users | User.ReadBasic.All |
+| find_experts | People.Read + User.ReadBasic.All |
+| get_user_org_chart | User.Read.All |
+
+`search_sharepoint` needs both because it queries the `driveItem`, `listItem`
+and `site` entity types, and Graph requires the permission for every type
+requested.
+
+Note that the **SharePoint** resource permissions in Entra — `AllSites.Read`,
+`MyFiles.Read`, `Sites.Selected` — belong to the legacy SharePoint API, not to
+Microsoft Graph. This server calls Graph, so they do not satisfy any tool here;
+the Graph permission `Sites.Read.All` is what the SharePoint tools need.
+
+Setting `GRAPH_SCOPES=auto` derives the requested set from the policy, which
+keeps the two from drifting apart.
 
 ## Exposing a subset of the tools
 

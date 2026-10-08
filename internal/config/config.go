@@ -77,6 +77,9 @@ type Config struct {
 	// Narrowing this is the lever that makes a withheld tool also a withheld
 	// permission: excluding search_emails in the tool policy stops the model
 	// calling it, while removing Mail.Read here stops the token being able to.
+	//
+	// The single value "auto" derives the set from the tools the exposure
+	// policy actually exposes, which keeps the two from drifting apart.
 	GraphScopes []string `env:"GRAPH_SCOPES" envSeparator:","`
 
 	// OBOExpiryMargin is how long before true expiry a cached delegated token

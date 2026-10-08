@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -26,6 +27,16 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/sony/gobreaker"
 )
+
+// sortedKeys orders a map's keys so log output is stable between restarts.
+func sortedKeys(m map[string][]string) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
 
 // Build information, set through -ldflags at build time. Reported at startup
 // and on the readiness endpoint so a running task can be tied back to a commit
@@ -125,31 +136,6 @@ func main() {
 			Msg("Token signature verification enabled")
 	}
 
-	if validationMode == auth.ModeOBO {
-		exchanger, err := auth.NewOBOExchanger(auth.OBOConfig{
-			TenantID:     cfg.AzureTenantID,
-			ClientID:     cfg.AzureClientID,
-			ClientSecret: cfg.AzureClientSecret,
-			Scopes:       cfg.GraphScopes,
-			ExpiryMargin: cfg.OBOExpiryMargin,
-			TokenURL:     cfg.EntraTokenURL,
-			Logger:       &logger,
-			Metrics:      metrics,
-		})
-		if err != nil {
-			log.Fatal().Err(err).Msg("Failed to create the on-behalf-of exchanger")
-		}
-		graphCredentials = exchanger
-
-		// Stated plainly at startup: this is the one mode that holds a
-		// credential, and the scope list is the bound on what that credential
-		// can obtain.
-		logger.Warn().
-			Strs("graph_scopes", exchanger.Scopes()).
-			Msg("On-behalf-of exchange enabled: this service holds a client secret and can obtain " +
-				"delegated Graph access for any user whose token it has seen")
-	}
-
 	// Initialize circuit breaker for MS Graph
 	circuitBreaker := gobreaker.NewCircuitBreaker(gobreaker.Settings{
 		Name:        "msgraph",
@@ -217,6 +203,61 @@ func main() {
 		Str("tool_policy_file", policyPath).
 		Bool("tool_policy_present", policyExplicit).
 		Msg("Tool policy resolved")
+
+	if validationMode == auth.ModeOBO {
+		// "auto" requests exactly what the exposed tools need, so the token
+		// obtained on a user's behalf cannot reach data that no exposed tool
+		// can ask for. Any other value is taken literally.
+		graphScopes := cfg.GraphScopes
+		if len(graphScopes) == 1 && strings.EqualFold(graphScopes[0], "auto") {
+			graphScopes = mcp.RequiredScopes(policy.EnabledTools(), policy.EnabledResources())
+			logger.Info().
+				Strs("graph_scopes", graphScopes).
+				Msg("Graph scopes derived from the exposure policy")
+		}
+
+		exchanger, err := auth.NewOBOExchanger(auth.OBOConfig{
+			TenantID:     cfg.AzureTenantID,
+			ClientID:     cfg.AzureClientID,
+			ClientSecret: cfg.AzureClientSecret,
+			Scopes:       graphScopes,
+			ExpiryMargin: cfg.OBOExpiryMargin,
+			TokenURL:     cfg.EntraTokenURL,
+			Logger:       &logger,
+			Metrics:      metrics,
+		})
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to create the on-behalf-of exchanger")
+		}
+		graphCredentials = exchanger
+
+		// Stated plainly at startup: this is the one mode that holds a
+		// credential, and the scope list is the bound on what that credential
+		// can obtain.
+		logger.Warn().
+			Strs("graph_scopes", exchanger.Scopes()).
+			Msg("On-behalf-of exchange enabled: this service holds a client secret and can obtain " +
+				"delegated Graph access for any user whose token it has seen")
+
+		// An exposed tool whose permission was never requested fails with a
+		// generic Graph 403 naming neither the tool nor the permission, which
+		// is indistinguishable from a bug. Report it here, where the fix is
+		// obvious, instead of leaving it to be found one tool at a time.
+		if unmet := mcp.UnsatisfiedTools(policy.EnabledTools(), exchanger.Scopes()); len(unmet) > 0 {
+			for _, tool := range sortedKeys(unmet) {
+				logger.Error().
+					Str("tool", tool).
+					Strs("missing_graph_scopes", unmet[tool]).
+					Msg("Exposed tool cannot work: its Microsoft Graph permission is not in " +
+						"GRAPH_SCOPES. Add the permission and consent it on the app registration " +
+						"used for the exchange, or withhold the tool in the exposure policy")
+			}
+			logger.Error().
+				Int("unusable_tools", len(unmet)).
+				Int("exposed_tools", len(policy.EnabledTools())).
+				Msg("Some exposed tools will fail with a Microsoft Graph authorization error")
+		}
+	}
 
 	// Initialize MCP server
 	mcpServer, err := mcp.NewServer(mcp.ServerConfig{
