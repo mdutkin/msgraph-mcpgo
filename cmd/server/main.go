@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/fnfbraga/msgraph-mcpgo/internal/mcp"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/observability"
 	apperrors "github.com/fnfbraga/msgraph-mcpgo/pkg/errors"
+	"github.com/mark3labs/mcp-go/server"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 	"github.com/sony/gobreaker"
@@ -38,6 +40,8 @@ func main() {
 		Str("environment", cfg.Environment).
 		Int("server_port", cfg.ServerPort).
 		Int("metrics_port", cfg.MetricsPort).
+		Str("public_url", cfg.PublicURL).
+		Bool("mcp_stateless", cfg.MCPStateless).
 		Msg("Starting MS Graph MCP Server")
 
 	// Initialize metrics
@@ -124,9 +128,33 @@ func main() {
 		GraphTimeout:        cfg.GraphTimeout,
 		DisableAuth:         cfg.DisableAuth,
 		SkipTokenValidation: cfg.SkipTokenValidation,
+		Stateless:           cfg.MCPStateless,
+		EndpointPath:        mcp.DefaultEndpointPath,
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create MCP server")
+	}
+
+	// Authentication is applied to every MCP request, discovery included.
+	validationMode := auth.ModeVerify
+	switch {
+	case cfg.DisableAuth:
+		validationMode = auth.ModeDisabled
+	case cfg.SkipTokenValidation:
+		validationMode = auth.ModeSkipSignature
+	}
+
+	resourceIdentifier := strings.TrimSuffix(cfg.PublicURL, "/")
+	metadataPath := server.ProtectedResourceMetadataPath(resourceIdentifier)
+
+	authMiddleware, err := auth.NewMiddleware(auth.MiddlewareConfig{
+		Validator:           tokenValidator,
+		Mode:                validationMode,
+		ResourceMetadataURL: resourceIdentifier + metadataPath,
+		Logger:              &logger,
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create authentication middleware")
 	}
 
 	// Initialize health handler
@@ -135,14 +163,25 @@ func main() {
 	// Setup HTTP server
 	mux := http.NewServeMux()
 
-	// MCP endpoint
-	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		mcpServer.ServeHTTP(w, r)
-	})
+	// MCP endpoint. The Streamable HTTP transport handles POST, GET and
+	// DELETE itself, so the mux must not filter by method.
+	mux.Handle(mcp.DefaultEndpointPath, authMiddleware.Handler(mcpServer.Handler()))
+
+	// OAuth 2.0 Protected Resource Metadata (RFC 9728). This document is
+	// intentionally public: it is how an MCP client that receives a 401
+	// discovers which authorization server issues tokens for this resource.
+	// It advertises endpoints and scopes only, never a credential.
+	mux.Handle(metadataPath, server.NewProtectedResourceMetadataHandler(
+		server.ProtectedResourceMetadataConfig{
+			Resource: resourceIdentifier,
+			AuthorizationServers: []string{
+				fmt.Sprintf("https://login.microsoftonline.com/%s/v2.0", cfg.AzureTenantID),
+			},
+			ScopesSupported:        []string{fmt.Sprintf("api://%s/access_as_user", cfg.AzureClientID)},
+			BearerMethodsSupported: []string{"header"},
+			ResourceName:           "Microsoft Graph MCP Server",
+		},
+	))
 
 	// Health check endpoints
 	mux.HandleFunc("/health/live", healthHandler.LivenessHandler)

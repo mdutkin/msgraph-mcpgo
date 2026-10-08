@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/fnfbraga/msgraph-mcpgo/internal/attachments"
@@ -18,16 +16,6 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog"
 	"github.com/sony/gobreaker"
-)
-
-// contextKey is the type for context keys
-type contextKey string
-
-const (
-	// GraphClientKey is the context key for the Graph client
-	GraphClientKey contextKey = "graph_client"
-	// TokenKey is the context key for the access token
-	TokenKey contextKey = "access_token"
 )
 
 // Server is the MCP server implementation
@@ -42,6 +30,8 @@ type Server struct {
 	metrics             *observability.Metrics
 	disableAuth         bool
 	skipTokenValidation bool
+	stateless           bool
+	endpointPath        string
 }
 
 // ServerConfig holds configuration for creating an MCP server
@@ -55,10 +45,25 @@ type ServerConfig struct {
 	GraphTimeout        time.Duration
 	DisableAuth         bool
 	SkipTokenValidation bool
+
+	// Stateless disables per-session transport state. Keep it true for any
+	// deployment with more than one task behind a load balancer.
+	Stateless bool
+
+	// EndpointPath is the path the transport is mounted on. It must match the
+	// mux route so that the transport builds correct absolute URLs.
+	EndpointPath string
 }
+
+// DefaultEndpointPath is the path the MCP transport is mounted on.
+const DefaultEndpointPath = "/mcp"
 
 // NewServer creates a new MCP server
 func NewServer(cfg ServerConfig) (*Server, error) {
+	if cfg.EndpointPath == "" {
+		cfg.EndpointPath = DefaultEndpointPath
+	}
+
 	s := &Server{
 		tokenValidator:      cfg.TokenValidator,
 		oboExchanger:        cfg.OBOExchanger,
@@ -68,6 +73,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		metrics:             cfg.Metrics,
 		disableAuth:         cfg.DisableAuth,
 		skipTokenValidation: cfg.SkipTokenValidation,
+		stateless:           cfg.Stateless,
+		endpointPath:        cfg.EndpointPath,
 		graphClientConfig: msgraph.ClientConfig{
 			Logger:         cfg.Logger,
 			Metrics:        cfg.Metrics,
@@ -224,112 +231,38 @@ func (s *Server) createResourceHandler(uri string) server.ResourceHandlerFunc {
 	}
 }
 
-// ServeHTTP handles HTTP requests to the MCP server
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Read the request body first so we can inspect the JSON-RPC method before
-	// deciding whether authentication is required.
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.logger.Error().Err(err).Msg("Failed to read request body")
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
-		return
+// Handler returns the MCP Streamable HTTP transport for this server.
+//
+// The transport is the one defined by the MCP specification: a single endpoint
+// that accepts JSON-RPC over POST and can upgrade a response to an SSE stream
+// when a tool reports progress. It replaces a hand-rolled POST-only handler
+// that implemented no part of the transport contract, which left the server
+// unable to stream, unable to express a session, and unable to answer the
+// GET and DELETE verbs a compliant client issues.
+//
+// Statelessness is deliberate for the default deployment. In stateful mode the
+// transport keeps per-session state in task memory, so a second request from
+// the same client must reach the same task. Behind an Application Load
+// Balancer spreading traffic over an autoscaling Fargate service that does not
+// hold, and the client would see its session disappear. Stateless mode makes
+// every request self-contained, which is what lets the service scale
+// horizontally without sticky routing.
+func (s *Server) Handler(opts ...server.StreamableHTTPOption) http.Handler {
+	base := []server.StreamableHTTPOption{
+		server.WithStateLess(s.stateless),
+		server.WithEndpointPath(s.endpointPath),
 	}
-	defer r.Body.Close()
-
-	var message json.RawMessage = body
-	method := extractMCPMethod(body)
-
-	var ctx context.Context
-	var userEmail string
-
-	// MCP discovery endpoints do not require authentication.
-	if isMCPDiscoveryMethod(method) {
-		ctx = observability.WithUserID(r.Context(), "anonymous")
-		ctx = observability.WithCorrelationID(ctx, generateCorrelationID())
-		s.logger.Info().
-			Str("mcp_method", method).
-			Msg("Handling unauthenticated MCP discovery request")
-	} else {
-		// Extract token from Authorization header
-		token := extractToken(r)
-		if token == "" {
-			s.logger.Warn().Msg("Missing authorization token")
-			http.Error(w, "Missing authorization token", http.StatusUnauthorized)
-			return
-		}
-
-		// Skip token validation if disabled (for testing only!)
-		if s.disableAuth {
-			s.logger.Warn().Msg("⚠️  Token validation disabled - passing token through to MS Graph")
-			// Skip validation but use the real token for MS Graph API
-			ctx = observability.WithUserID(r.Context(), "test-user")
-			ctx = observability.WithCorrelationID(ctx, generateCorrelationID())
-			ctx = context.WithValue(ctx, TokenKey, token) // Pass real token to MS Graph!
-			userEmail = "test@example.com"
-		} else if s.skipTokenValidation {
-			// Skip local JWT verification; token will be validated by MS Graph during OBO
-			s.logger.Info().Msg("Token signature verification skipped - OBO will validate token")
-			claims, err := s.tokenValidator.ParseClaimsWithoutVerification(token)
-			if err != nil {
-				s.logger.Warn().Err(err).Msg("Could not parse token claims for context; using placeholder")
-				ctx = observability.WithUserID(r.Context(), "unknown")
-				userEmail = ""
-			} else {
-				ctx = observability.WithUserID(r.Context(), claims.GetUserID())
-				userEmail = claims.Email
-			}
-			ctx = observability.WithCorrelationID(ctx, generateCorrelationID())
-			ctx = context.WithValue(ctx, TokenKey, token)
-		} else {
-			// Validate token
-			claims, err := s.tokenValidator.ValidateToken(r.Context(), token)
-			if err != nil {
-				s.logger.Error().Err(err).Msg("Token validation failed")
-				http.Error(w, "Invalid token", http.StatusUnauthorized)
-				return
-			}
-
-			// Add user context
-			ctx = observability.WithUserID(r.Context(), claims.GetUserID())
-			ctx = observability.WithCorrelationID(ctx, generateCorrelationID())
-			ctx = context.WithValue(ctx, TokenKey, token)
-			userEmail = claims.Email
-		}
-	}
-
-	// Create new request with updated context
-	r = r.WithContext(ctx)
-
-	// Log request
-	logger := observability.LoggerFromContext(ctx, *s.logger)
-	// Request and response payloads are never logged. An MCP body carries
-	// mailbox content, chat text and extracted attachment text; writing it to
-	// a log sink would copy customer data out of Microsoft 365. Only envelope
-	// metadata is recorded, which is what request tracing actually needs.
-	logger.Info().
-		Str("method", r.Method).
-		Str("path", r.URL.Path).
-		Str("mcp_method", method).
-		Str("user_email", userEmail).
-		Int("request_bytes", len(message)).
-		Msg("MCP request received")
-
-	// Handle the message
-	response := s.mcpServer.HandleMessage(ctx, message)
-
-	// Write response
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		s.logger.Error().Err(err).Msg("Failed to encode response")
-	}
+	return server.NewStreamableHTTPServer(s.mcpServer, append(base, opts...)...)
 }
 
 // getGraphClient retrieves or creates a Graph client from context
 func (s *Server) getGraphClient(ctx context.Context) (*msgraph.Client, error) {
-	// Get token from context
-	incomingToken, ok := ctx.Value(TokenKey).(string)
-	if !ok || incomingToken == "" {
-		return nil, apperrors.NewTokenValidationError(fmt.Errorf("token not found in context"))
+	// The token is placed in the context by the authentication middleware.
+	// Its absence means the request bypassed authentication, which is a bug
+	// rather than an anonymous caller, so it fails closed.
+	incomingToken, ok := auth.TokenFromContext(ctx)
+	if !ok {
+		return nil, apperrors.NewTokenValidationError(fmt.Errorf("no caller credential in context"))
 	}
 
 	var graphToken string
@@ -382,57 +315,4 @@ func (s *Server) getGraphClient(ctx context.Context) (*msgraph.Client, error) {
 // isGraphAudience returns true if the token audience is MS Graph (so it can be used as Graph token directly).
 func isGraphAudience(aud string) bool {
 	return aud == "https://graph.microsoft.com" || aud == "00000003-0000-0000-c000-000000000000"
-}
-
-// mcpMethodPayload extracts the JSON-RPC method from an MCP request body.
-type mcpMethodPayload struct {
-	Method string `json:"method"`
-}
-
-// extractMCPMethod parses the JSON-RPC method from a raw request body.
-// It returns an empty string if the body is not valid JSON or has no method.
-func extractMCPMethod(body []byte) string {
-	var payload mcpMethodPayload
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return ""
-	}
-	return payload.Method
-}
-
-// isMCPDiscoveryMethod returns true for MCP methods that do not require
-// authentication, such as initialization and capability discovery.
-func isMCPDiscoveryMethod(method string) bool {
-	switch method {
-	case "initialize",
-		"notifications/initialized",
-		"tools/list",
-		"resources/list",
-		"prompts/list":
-		return true
-	default:
-		return false
-	}
-}
-
-// extractToken extracts the bearer token from the Authorization header
-func extractToken(r *http.Request) string {
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		return ""
-	}
-
-	// Expected format: "Bearer <token>"
-	parts := strings.Split(authHeader, " ")
-	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-		return ""
-	}
-
-	return parts[1]
-}
-
-// generateCorrelationID generates a unique correlation ID for request tracing
-func generateCorrelationID() string {
-	// Simple implementation using timestamp
-	// In production, use UUID or similar
-	return fmt.Sprintf("req_%d", time.Now().UnixNano())
 }

@@ -7,6 +7,7 @@ require (
 	github.com/caarlos0/env/v10 v10.0.0
 	github.com/conductor-oss/markitdown v0.0.1
 	github.com/edamplified/go2markdown v1.0.0
+	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/lestrrat-go/jwx/v2 v2.0.21
 	github.com/mark3labs/mcp-go v1.2.0
@@ -41,7 +42,6 @@ require (
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/gomutex/godocx v0.1.5 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/hhrutter/lzw v1.0.0 // indirect
 	github.com/hhrutter/pkcs7 v0.2.0 // indirect
 	github.com/hhrutter/tiff v1.0.2 // indirect

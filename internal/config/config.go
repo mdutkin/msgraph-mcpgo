@@ -14,6 +14,18 @@ type Config struct {
 	Environment string `env:"ENVIRONMENT" envDefault:"production"`
 	ServerPort  int    `env:"SERVER_PORT" envDefault:"8080"`
 
+	// PublicURL is the externally reachable base URL of this service, for
+	// example https://msgraph-mcp.example.com. It is the OAuth 2.0 protected
+	// resource identifier published in the RFC 9728 metadata document and
+	// advertised in the WWW-Authenticate header of every 401, so it must match
+	// the hostname clients actually connect to, not the container address.
+	PublicURL string `env:"PUBLIC_URL" envDefault:"http://localhost:8080"`
+
+	// MCPStateless keeps the Streamable HTTP transport free of per-session
+	// state. Required whenever more than one task serves the same load
+	// balancer target group, because session state lives in task memory.
+	MCPStateless bool `env:"MCP_STATELESS" envDefault:"true"`
+
 	// Azure AD / EntraID
 	AzureTenantID     string `env:"AZURE_TENANT_ID,required"`
 	AzureClientID     string `env:"AZURE_CLIENT_ID,required"`

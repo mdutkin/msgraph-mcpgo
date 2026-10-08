@@ -6,7 +6,7 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 
 ## Features
 
-- HTTP MCP endpoint with tools and resources
+- MCP Streamable HTTP transport with tools and resources
 - Microsoft Entra ID token validation and OAuth On-Behalf-Of exchange
 - Outlook email search, reading, attachments, and sending
 - Calendar events, availability lookup, and Teams meeting scheduling
@@ -27,7 +27,10 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
         v
     Microsoft Graph
 
-The client sends a Microsoft Entra ID access token to POST /mcp. The server validates it, exchanges it through the OBO flow for a delegated Microsoft Graph token, and invokes Graph APIs as that user.
+The client sends a Microsoft Entra ID access token to /mcp over the MCP
+Streamable HTTP transport. The server validates it, exchanges it through the OBO
+flow for a delegated Microsoft Graph token, and invokes Graph APIs as that user.
+No caller state is held on the server, so any task can serve any request.
 
 ## Requirements
 
@@ -86,6 +89,7 @@ Or build and run the binary:
 Default endpoints:
 
 - MCP: http://localhost:8080/mcp
+- Protected resource metadata: http://localhost:8080/.well-known/oauth-protected-resource
 - Browser test console: http://localhost:8080/test
 - Liveness: http://localhost:8080/health/live
 - Readiness: http://localhost:8080/health/ready
@@ -100,6 +104,8 @@ Default endpoints:
 | AZURE_CLIENT_SECRET | Yes | — | App secret used for OBO exchange |
 | ENVIRONMENT | No | production | Runtime environment; development enables development logging |
 | SERVER_PORT | No | 8080 | HTTP server port |
+| PUBLIC_URL | No | http://localhost:8080 | Externally reachable base URL. Published as the OAuth protected resource identifier and in every 401 challenge |
+| MCP_STATELESS | No | true | Keep the Streamable HTTP transport free of per-session state. Required when more than one task serves a load balancer target group |
 | METRICS_PORT | No | 9090 | Prometheus metrics port |
 | GRAPH_TIMEOUT | No | 60s | Microsoft Graph operation timeout |
 | TOKEN_CACHE_TTL | No | 5m | Token cache lifetime |
@@ -113,12 +119,23 @@ Default endpoints:
 
 ## Using the MCP endpoint
 
-Discovery methods can be called without authentication. Tool and resource requests require a bearer token unless authentication is explicitly disabled.
+Every method requires a bearer token, discovery included. A request without a
+valid token receives 401 with a `WWW-Authenticate` challenge that points at the
+protected resource metadata document, which is the discovery mechanism defined
+by the MCP authorization specification and RFC 9728:
+
+    WWW-Authenticate: Bearer error="invalid_token",
+      resource_metadata="https://your-host/.well-known/oauth-protected-resource"
+
+Set `PUBLIC_URL` to the hostname clients actually connect to, otherwise the
+advertised metadata URL points at the container.
 
 List tools:
 
     curl -X POST http://localhost:8080/mcp \
+      -H "Authorization: Bearer YOUR_ENTRA_ACCESS_TOKEN" \
       -H "Content-Type: application/json" \
+      -H "Accept: application/json, text/event-stream" \
       -d "{"jsonrpc":"2.0","id":1,"method":"tools/list"}"
 
 Call an authenticated tool:
