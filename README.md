@@ -114,7 +114,16 @@ Default endpoints:
 | DISABLE_AUTH | No | false | Development-only authentication bypass |
 | SKIP_TOKEN_VALIDATION | No | false | Skip local JWT verification; Graph still validates during OBO |
 
-> **Warning:** Never enable DISABLE_AUTH in a public or production deployment. Use SKIP_TOKEN_VALIDATION only when local JWKS verification cannot be used and you understand the reduced defense in depth.
+DISABLE_AUTH and SKIP_TOKEN_VALIDATION are refused at startup unless
+ENVIRONMENT names a development environment (`development` or `dev`). The
+server exits with a non-zero status and an explanation rather than starting in
+a weakened state. Outside development, PUBLIC_URL must also be an absolute
+https URL that is not a loopback address, because it is published to clients as
+the OAuth protected resource identifier.
+
+ENVIRONMENT itself must be one of `development`, `dev`, `staging`, `production`
+or `prod`. An unrecognised value is refused, so a typo cannot produce a
+deployment whose posture differs from what the variable says.
 
 ## Using the MCP endpoint
 

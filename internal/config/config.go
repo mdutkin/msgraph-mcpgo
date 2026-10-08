@@ -2,6 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/caarlos0/env/v10"
@@ -46,6 +49,9 @@ type Config struct {
 	RateLimitPerUser int `env:"RATE_LIMIT_PER_USER" envDefault:"100"`
 
 	// Testing
+	//
+	// DisableAuth and SkipTokenValidation are rejected outside a development
+	// environment by Validate. See that method for why.
 	DisableAuth bool `env:"DISABLE_AUTH" envDefault:"false"`
 
 	// SkipTokenValidation skips local JWT signature verification; token is still
@@ -63,7 +69,104 @@ func Load() (*Config, error) {
 	if err := env.Parse(cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+// knownEnvironments are the accepted ENVIRONMENT values. An unrecognised value
+// is rejected rather than tolerated: a typo such as "Production" or "prod "
+// would otherwise satisfy neither IsProduction nor IsDevelopment, leaving the
+// operator with a deployment whose posture is not what the variable says.
+var knownEnvironments = map[string]bool{
+	"development": true,
+	"dev":         true,
+	"staging":     true,
+	"production":  true,
+	"prod":        true,
+}
+
+// Validate rejects a configuration that cannot be served safely.
+//
+// It fails closed. The two authentication bypasses are permitted only when
+// ENVIRONMENT names a development environment, so any value that is not
+// explicitly a development one, including an empty or misspelled value,
+// refuses to start with a bypass enabled. Refusing at startup is the point:
+// a bypass that is silently honoured in a deployed environment produces a
+// service that authenticates nobody while reporting itself healthy, and
+// nothing downstream can detect the difference.
+func (c *Config) Validate() error {
+	var problems []string
+
+	if !knownEnvironments[c.Environment] {
+		problems = append(problems, fmt.Sprintf(
+			"ENVIRONMENT=%q is not recognised; use one of development, dev, staging, production, prod",
+			c.Environment))
+	}
+
+	if !c.IsDevelopment() {
+		if c.DisableAuth {
+			problems = append(problems, fmt.Sprintf(
+				"DISABLE_AUTH=true is refused when ENVIRONMENT=%q: it accepts any bearer token "+
+					"and forwards it to Microsoft Graph without validation", c.Environment))
+		}
+		if c.SkipTokenValidation {
+			problems = append(problems, fmt.Sprintf(
+				"SKIP_TOKEN_VALIDATION=true is refused when ENVIRONMENT=%q: token signatures, "+
+					"audience and issuer are not verified locally, and the identity written to "+
+					"the audit log is taken from an unverified token", c.Environment))
+		}
+	}
+
+	problems = append(problems, c.validatePublicURL()...)
+
+	if len(problems) > 0 {
+		return fmt.Errorf("invalid configuration:\n  - %s", strings.Join(problems, "\n  - "))
+	}
+	return nil
+}
+
+// validatePublicURL checks the OAuth protected resource identifier.
+func (c *Config) validatePublicURL() []string {
+	var problems []string
+
+	u, err := url.Parse(c.PublicURL)
+	if err != nil || !u.IsAbs() || u.Host == "" {
+		return []string{fmt.Sprintf(
+			"PUBLIC_URL=%q must be an absolute URL such as https://msgraph-mcp.example.com", c.PublicURL)}
+	}
+
+	if c.IsDevelopment() {
+		return nil
+	}
+
+	// Outside development the value is published to clients as the resource
+	// identifier and in every 401 challenge, so a default or internal value
+	// gives clients a metadata URL they cannot reach.
+	if u.Scheme != "https" {
+		problems = append(problems, fmt.Sprintf(
+			"PUBLIC_URL=%q must use https when ENVIRONMENT=%q: the value is advertised to "+
+				"clients as the OAuth protected resource identifier", c.PublicURL, c.Environment))
+	}
+	if isLoopbackOrUnspecified(u.Hostname()) {
+		problems = append(problems, fmt.Sprintf(
+			"PUBLIC_URL=%q points at the container itself when ENVIRONMENT=%q: set it to the "+
+				"hostname clients connect to", c.PublicURL, c.Environment))
+	}
+
+	return problems
+}
+
+func isLoopbackOrUnspecified(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsUnspecified()
 }
 
 // IsDevelopment returns true if running in development mode
