@@ -98,21 +98,21 @@ func (v *TokenValidator) parseAndValidateToken(ctx context.Context, tokenString 
 		return nil, fmt.Errorf("failed to get JWKS keys: %w", err)
 	}
 
-	// Log token header and audience for debugging
-	if parts := strings.SplitN(tokenString, ".", 3); len(parts) >= 2 {
-		var header map[string]interface{}
-		if hb, e := base64.RawURLEncoding.DecodeString(parts[0]); e == nil {
-			json.Unmarshal(hb, &header)
+	// Audience and issuer are the two claims an operator needs when an app
+	// registration is misconfigured. They are emitted at debug level only:
+	// dumping the whole decoded payload at info level put user identifiers
+	// and group claims into the log sink on every request.
+	if v.logger.GetLevel() <= zerolog.DebugLevel {
+		if parts := strings.SplitN(tokenString, ".", 3); len(parts) >= 2 {
+			var payload map[string]interface{}
+			if pb, e := base64.RawURLEncoding.DecodeString(parts[1]); e == nil {
+				_ = json.Unmarshal(pb, &payload)
+			}
+			v.logger.Debug().
+				Str("aud", fmt.Sprintf("%v", payload["aud"])).
+				Str("iss", fmt.Sprintf("%v", payload["iss"])).
+				Msg("Token header inspection")
 		}
-		var payload map[string]interface{}
-		if pb, e := base64.RawURLEncoding.DecodeString(parts[1]); e == nil {
-			json.Unmarshal(pb, &payload)
-		}
-		v.logger.Info().
-			Interface("header", header).
-			Str("aud", fmt.Sprintf("%v", payload["aud"])).
-			Str("iss", fmt.Sprintf("%v", payload["iss"])).
-			Msg("Token debug info")
 	}
 
 	// Parse token (InferAlgorithmFromKey is needed because Azure JWKS keys

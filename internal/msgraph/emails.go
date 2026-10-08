@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fnfbraga/msgraph-mcpgo/internal/attachments"
+	"github.com/fnfbraga/msgraph-mcpgo/internal/observability"
 	"github.com/microsoftgraph/msgraph-sdk-go/models"
 	"github.com/microsoftgraph/msgraph-sdk-go/users"
 )
@@ -77,7 +78,7 @@ func (c *Client) GetEmails(ctx context.Context, top int32, filter string) ([]*Em
 
 	c.logger.Debug().
 		Int("count", len(emails)).
-		Str("filter", filter).
+		Str("filter_digest", observability.Redact(filter)).
 		Msg("Fetched emails successfully")
 
 	return emails, nil
@@ -122,7 +123,7 @@ func (c *Client) SearchEmails(ctx context.Context, query string, top int32) ([]*
 
 	c.logger.Debug().
 		Int("count", len(emails)).
-		Str("query", query).
+		Str("query_digest", observability.Redact(query)).
 		Msg("Searched emails successfully")
 
 	return emails, nil
@@ -211,8 +212,8 @@ func (c *Client) SearchEmailsWithOptions(ctx context.Context, opts SearchOptions
 
 	c.logger.Debug().
 		Int("count", len(emails)).
-		Str("query", opts.Query).
-		Str("filter", filter).
+		Str("query_digest", observability.Redact(opts.Query)).
+		Str("filter_digest", observability.Redact(filter)).
 		Str("folder", opts.Folder).
 		Msg("Fetched emails with options")
 
@@ -764,7 +765,7 @@ func (c *Client) SendEmail(ctx context.Context, req SendEmailRequest) error {
 	if err == nil {
 		c.logger.Info().
 			Strs("to", req.To).
-			Str("subject", req.Subject).
+			Str("subject_digest", observability.Redact(req.Subject)).
 			Msg("Email sent successfully")
 	}
 

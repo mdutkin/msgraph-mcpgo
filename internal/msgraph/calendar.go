@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fnfbraga/msgraph-mcpgo/internal/observability"
 	abs "github.com/microsoft/kiota-abstractions-go"
 	"github.com/microsoftgraph/msgraph-sdk-go/models"
 	"github.com/microsoftgraph/msgraph-sdk-go/users"
@@ -431,7 +432,7 @@ func (c *Client) ScheduleMeeting(ctx context.Context, subject string, attendees 
 	}
 
 	c.logger.Info().
-		Str("subject", subject).
+		Str("subject_digest", observability.Redact(subject)).
 		Int("attendees", len(attendees)).
 		Msg("Scheduled meeting successfully")
 

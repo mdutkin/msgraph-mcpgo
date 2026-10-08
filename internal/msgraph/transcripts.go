@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fnfbraga/msgraph-mcpgo/internal/observability"
 	abs "github.com/microsoft/kiota-abstractions-go"
 	"github.com/microsoftgraph/msgraph-sdk-go/users"
 )
@@ -136,14 +137,14 @@ func (c *Client) GetMeetingTranscript(ctx context.Context, opts TranscriptOption
 	for i, candidate := range candidates {
 		c.logger.Debug().
 			Int("attempt", i+1).
-			Str("subject", candidate.meetingSubject).
+			Str("subject_digest", observability.Redact(candidate.meetingSubject)).
 			Str("join_url", candidate.joinURL).
 			Bool("is_organizer", candidate.isOrganizer).
 			Msg("Trying candidate meeting")
 
 		if !candidate.isOrganizer {
 			lastErr = fmt.Errorf("meeting %q: you are not the meeting organizer. Microsoft Graph API only allows the meeting organizer to retrieve transcripts via Delegated permissions", candidate.meetingSubject)
-			c.logger.Warn().Str("subject", candidate.meetingSubject).Msg("Skipping candidate: user is not the meeting organizer")
+			c.logger.Warn().Str("subject_digest", observability.Redact(candidate.meetingSubject)).Msg("Skipping candidate: user is not the meeting organizer")
 			continue
 		}
 

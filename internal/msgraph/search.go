@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fnfbraga/msgraph-mcpgo/internal/observability"
 	"github.com/microsoftgraph/msgraph-sdk-go/models"
 	"github.com/microsoftgraph/msgraph-sdk-go/search"
 )
@@ -267,7 +268,7 @@ func (c *Client) SearchSharepoint(ctx context.Context, query string, top int32) 
 	results = validated
 
 	c.logger.Info().
-		Str("query", query).
+		Str("query_digest", observability.Redact(query)).
 		Int("count", len(results)).
 		Msg("Searched SharePoint successfully")
 

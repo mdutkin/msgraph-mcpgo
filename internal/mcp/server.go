@@ -302,22 +302,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Log request
 	logger := observability.LoggerFromContext(ctx, *s.logger)
+	// Request and response payloads are never logged. An MCP body carries
+	// mailbox content, chat text and extracted attachment text; writing it to
+	// a log sink would copy customer data out of Microsoft 365. Only envelope
+	// metadata is recorded, which is what request tracing actually needs.
 	logger.Info().
 		Str("method", r.Method).
 		Str("path", r.URL.Path).
 		Str("mcp_method", method).
 		Str("user_email", userEmail).
+		Int("request_bytes", len(message)).
 		Msg("MCP request received")
-
-	logger.Info().RawJSON("mcp_request", message).Msg("MCP request body")
 
 	// Handle the message
 	response := s.mcpServer.HandleMessage(ctx, message)
-
-	// Log the response
-	if respJSON, err := json.Marshal(response); err == nil {
-		logger.Info().RawJSON("mcp_response", respJSON).Msg("MCP response body")
-	}
 
 	// Write response
 	w.Header().Set("Content-Type", "application/json")

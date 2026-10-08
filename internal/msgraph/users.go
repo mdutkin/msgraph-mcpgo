@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/fnfbraga/msgraph-mcpgo/internal/observability"
 	abs "github.com/microsoft/kiota-abstractions-go"
 	"github.com/microsoftgraph/msgraph-sdk-go/models"
 	"github.com/microsoftgraph/msgraph-sdk-go/users"
@@ -78,7 +79,7 @@ func (c *Client) SearchUsers(ctx context.Context, query string, top int32) ([]*U
 
 	c.logger.Debug().
 		Int("count", len(results)).
-		Str("query", query).
+		Str("query_digest", observability.Redact(query)).
 		Msg("Searched users successfully")
 
 	return results, nil

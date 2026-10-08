@@ -11,6 +11,7 @@ import (
 
 	"github.com/fnfbraga/msgraph-mcpgo/internal/attachments"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/msgraph"
+	"github.com/fnfbraga/msgraph-mcpgo/internal/observability"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -77,9 +78,9 @@ func (s *Server) handleSearchEmails(ctx context.Context, args map[string]interfa
 	}
 
 	s.logger.Info().
-		Str("query", opts.Query).
+		Str("query_digest", observability.Redact(opts.Query)).
 		Int32("top", opts.Top).
-		Str("filter", opts.Filter).
+		Str("filter_digest", observability.Redact(opts.Filter)).
 		Str("folder", opts.Folder).
 		Str("orderby", opts.OrderBy).
 		Msg("Searching emails")
@@ -326,7 +327,7 @@ func (s *Server) handleGetMeetingTranscript(ctx context.Context, args map[string
 	}
 
 	s.logger.Info().
-		Str("subject", opts.Subject).
+		Str("subject_digest", observability.Redact(opts.Subject)).
 		Bool("last_meeting", opts.LastMeeting).
 		Msg("Getting meeting transcript")
 
@@ -436,7 +437,7 @@ func (s *Server) handleSearchUsers(ctx context.Context, args map[string]interfac
 	}
 
 	s.logger.Info().
-		Str("query", query).
+		Str("query_digest", observability.Redact(query)).
 		Int32("top", top).
 		Msg("Searching users")
 
@@ -555,7 +556,7 @@ func (s *Server) handleScheduleMeeting(ctx context.Context, args map[string]inte
 	}
 
 	s.logger.Info().
-		Str("subject", subject).
+		Str("subject_digest", observability.Redact(subject)).
 		Str("start_time", startTimeStr).
 		Msg("Scheduling meeting")
 
@@ -605,7 +606,7 @@ func (s *Server) handleSearchSharepoint(ctx context.Context, args map[string]int
 	}
 
 	s.logger.Info().
-		Str("query", query).
+		Str("query_digest", observability.Redact(query)).
 		Int32("top", top).
 		Msg("Searching SharePoint")
 
@@ -1013,7 +1014,7 @@ func (s *Server) handleSendEmail(ctx context.Context, args map[string]interface{
 
 	s.logger.Info().
 		Strs("to", to).
-		Str("subject", subject).
+		Str("subject_digest", observability.Redact(subject)).
 		Str("body_type", bodyType).
 		Int("attachments", len(attachmentDescs)).
 		Msg("Sending email")
