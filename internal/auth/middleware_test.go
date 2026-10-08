@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -424,6 +425,7 @@ func TestNewMiddlewareRequiresAVerifierInVerifiedMode(t *testing.T) {
 
 func TestParseValidationMode(t *testing.T) {
 	cases := map[string]ValidationMode{
+		"obo":               ModeOBO,
 		"verified_identity": ModeVerifiedIdentity,
 		"graph_passthrough": ModeGraphPassthrough,
 		"disabled":          ModeDisabled,
@@ -439,5 +441,153 @@ func TestParseValidationMode(t *testing.T) {
 	}
 	if _, err := ParseValidationMode("whatever"); err == nil {
 		t.Error("an unknown mode was accepted")
+	}
+}
+
+// ── obo mode ─────────────────────────────────────────────────────────────────
+
+// In obo mode the Authorization header carries a token for this API, so the
+// audience check is against the application rather than Graph.
+func newOBOMiddleware(t *testing.T, entra *fakeEntra) *Middleware {
+	t.Helper()
+
+	cache, _, err := NewJWKSCache(context.Background(), JWKSConfig{
+		TenantID:           testTenantID,
+		RefreshInterval:    time.Hour,
+		MinRefreshInterval: time.Minute,
+		DiscoveryURL:       entra.server.URL + "/.well-known/openid-configuration",
+		Logger:             testLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewJWKSCache: %v", err)
+	}
+
+	verifier, err := NewIdentityVerifier(IdentityVerifierConfig{
+		JWKS:      cache,
+		TenantID:  testTenantID,
+		Audiences: []string{testClientID, "api://" + testClientID},
+		Logger:    testLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewIdentityVerifier: %v", err)
+	}
+
+	m, err := NewMiddleware(MiddlewareConfig{
+		Verifier: verifier,
+		Mode:     ModeOBO,
+		Logger:   testLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewMiddleware: %v", err)
+	}
+	return m
+}
+
+func TestOBOModeAcceptsATokenForThisAPI(t *testing.T) {
+	entra := newFakeEntra(t)
+	entra.addKey("key-1", true)
+	m := newOBOMiddleware(t, entra)
+
+	assertion := entra.assertion("key-1", nil)
+
+	var forwarded string
+	var recordedUser string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwarded, _ = TokenFromContext(r.Context())
+		recordedUser = observability.GetUserID(r.Context())
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+assertion)
+
+	rec := httptest.NewRecorder()
+	m.Handler(next).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	// The caller's own token reaches the context; the exchange happens later,
+	// only when a tool actually needs Graph.
+	if forwarded != assertion {
+		t.Error("the caller's token did not reach the context unchanged")
+	}
+	if recordedUser != testOID {
+		t.Errorf("recorded user = %q, want the verified oid", recordedUser)
+	}
+}
+
+// A Graph token presented in obo mode must be refused: it cannot be exchanged,
+// and accepting it would mean this service never verified anything.
+func TestOBOModeRejectsAGraphToken(t *testing.T) {
+	entra := newFakeEntra(t)
+	entra.addKey("key-1", true)
+	m := newOBOMiddleware(t, entra)
+
+	reached := false
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+makeToken(t, graphPayload()))
+
+	rec := httptest.NewRecorder()
+	m.Handler(okHandler(&reached)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	if reached {
+		t.Fatal("a Graph-audience token was accepted in obo mode")
+	}
+}
+
+// The signature is verified before anything is sent to Entra, so a forged
+// token never reaches the token endpoint.
+func TestOBOModeRejectsAForgedTokenBeforeExchange(t *testing.T) {
+	entra := newFakeEntra(t)
+	entra.addKey("key-1", true)
+	entra.addKey("forged", false)
+	m := newOBOMiddleware(t, entra)
+
+	reached := false
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+entra.assertion("forged", nil))
+
+	rec := httptest.NewRecorder()
+	m.Handler(okHandler(&reached)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	if reached {
+		t.Fatal("a forged token reached the transport")
+	}
+}
+
+// api://<client-id> is the other spelling Entra may put in the audience claim.
+func TestOBOModeAcceptsTheApiUriAudience(t *testing.T) {
+	entra := newFakeEntra(t)
+	entra.addKey("key-1", true)
+	m := newOBOMiddleware(t, entra)
+
+	assertion := entra.assertion("key-1", map[string]any{
+		"aud": []string{"api://" + testClientID},
+	})
+
+	reached := false
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+assertion)
+
+	rec := httptest.NewRecorder()
+	m.Handler(okHandler(&reached)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !reached {
+		t.Fatal("a token with the api:// audience did not reach the transport")
+	}
+}
+
+func TestNewMiddlewareRequiresAVerifierInOBOMode(t *testing.T) {
+	if _, err := NewMiddleware(MiddlewareConfig{Mode: ModeOBO, Logger: testLogger()}); err == nil {
+		t.Fatal("obo mode was accepted with no verifier")
 	}
 }

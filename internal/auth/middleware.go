@@ -16,7 +16,21 @@ import (
 type ValidationMode int
 
 const (
-	// ModeVerifiedIdentity is the strongest mode. The caller presents two
+	// ModeOBO is the mode for a client that holds a token for this API rather
+	// than for Microsoft Graph.
+	//
+	// The caller presents an access token whose audience is this application.
+	// Its signature is verified against the tenant's published keys, and it is
+	// then exchanged through the OAuth 2.0 On-Behalf-Of flow for a delegated
+	// Microsoft Graph token.
+	//
+	// This is the only mode in which the service holds a credential of its
+	// own, and therefore the only one in which it has standing privilege: the
+	// client secret can mint a delegated Graph token for any user whose
+	// assertion it has seen. See OBOExchanger.
+	ModeOBO ValidationMode = iota
+
+	// ModeVerifiedIdentity is the strongest mode without standing privilege. The caller presents two
 	// credentials: a Microsoft Graph access token in the Authorization header,
 	// which is forwarded to Graph unchanged, and an Entra identity assertion in
 	// a separate header, whose signature is verified against the tenant's
@@ -26,7 +40,7 @@ const (
 	// anyone but Graph. Verifying a credential that can be verified gives the
 	// audit trail and the rate limiter an identity backed by Entra's signature
 	// instead of by an attacker-controlled claim.
-	ModeVerifiedIdentity ValidationMode = iota
+	ModeVerifiedIdentity
 
 	// ModeGraphPassthrough forwards the Graph token after inspecting its
 	// shape, audience, tenant and expiry. No signature is verified, because
@@ -41,6 +55,8 @@ const (
 // ParseValidationMode maps a configuration value onto a mode.
 func ParseValidationMode(s string) (ValidationMode, error) {
 	switch s {
+	case "obo":
+		return ModeOBO, nil
 	case "verified_identity":
 		return ModeVerifiedIdentity, nil
 	case "graph_passthrough":
@@ -49,13 +65,15 @@ func ParseValidationMode(s string) (ValidationMode, error) {
 		return ModeDisabled, nil
 	default:
 		return 0, fmt.Errorf(
-			"auth mode %q is not recognised; use verified_identity, graph_passthrough or disabled", s)
+			"auth mode %q is not recognised; use obo, verified_identity, graph_passthrough or disabled", s)
 	}
 }
 
 // String renders the mode for startup logging.
 func (m ValidationMode) String() string {
 	switch m {
+	case ModeOBO:
+		return "obo"
 	case ModeVerifiedIdentity:
 		return "verified_identity"
 	case ModeGraphPassthrough:
@@ -127,10 +145,14 @@ func NewMiddleware(cfg MiddlewareConfig) (*Middleware, error) {
 	if cfg.Logger == nil {
 		return nil, fmt.Errorf("auth middleware: logger is required")
 	}
-	if cfg.Mode != ModeDisabled && cfg.Inspector == nil {
+	// The Graph inspector reads a forwarded Graph token. In obo mode the caller
+	// presents a token for this API instead, so there is nothing for it to
+	// inspect.
+	needsInspector := cfg.Mode == ModeGraphPassthrough || cfg.Mode == ModeVerifiedIdentity
+	if needsInspector && cfg.Inspector == nil {
 		return nil, fmt.Errorf("auth middleware: inspector is required in %s mode", cfg.Mode)
 	}
-	if cfg.Mode == ModeVerifiedIdentity && cfg.Verifier == nil {
+	if (cfg.Mode == ModeVerifiedIdentity || cfg.Mode == ModeOBO) && cfg.Verifier == nil {
 		return nil, fmt.Errorf("auth middleware: identity verifier is required in %s mode", cfg.Mode)
 	}
 
@@ -192,6 +214,18 @@ func (m *Middleware) authenticate(ctx context.Context, graphToken, assertion str
 
 	if m.mode == ModeDisabled {
 		return withContext(&Claims{ObjectID: "auth-disabled"})
+	}
+
+	// In obo mode the Authorization header carries a token for this API, not
+	// for Graph. It is verified here; the exchange happens lazily when a tool
+	// actually needs Graph, so initialize and tools/list cost no token round
+	// trip.
+	if m.mode == ModeOBO {
+		verified, err := m.verifier.Verify(ctx, graphToken)
+		if err != nil {
+			return nil, nil, fmt.Errorf("access token rejected: %w", err)
+		}
+		return withContext(verified)
 	}
 
 	// The Graph token is inspected in every mode. It is the credential that
@@ -268,6 +302,9 @@ func (m *Middleware) reject(w http.ResponseWriter, r *http.Request, errorCode st
 	w.WriteHeader(http.StatusUnauthorized)
 
 	description := "A Microsoft Graph access token is required in the Authorization header."
+	if m.mode == ModeOBO {
+		description = "An access token issued for this API is required in the Authorization header."
+	}
 	if m.mode == ModeVerifiedIdentity {
 		description += fmt.Sprintf(" An Entra identity assertion is required in %s.", m.assertionHeader)
 	}

@@ -18,6 +18,48 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 
 ## Architecture
 
+There are four authentication modes, selected by `AUTH_MODE`. They differ in
+what the caller presents and in whether this service holds a credential of its
+own.
+
+| Mode | Caller presents | This service holds | Signature verified |
+| --- | --- | --- | --- |
+| `obo` | an access token for **this API** | a client secret | yes |
+| `verified_identity` | a Graph token **and** an Entra assertion | nothing | yes, the assertion |
+| `graph_passthrough` | a Graph token | nothing | no, see below |
+| `disabled` | anything | nothing | no. Development only |
+
+### obo
+
+    MCP client
+        |
+        | Authorization: access token for this API
+        v
+    msgraph-mcpgo  --> Entra JWKS:  verify the signature
+        |          --> Entra token: exchange for a delegated Graph token
+        v
+    Microsoft Graph
+
+The caller's token is verified against the tenant's published keys, its audience
+must be this application, and it is then exchanged through the On-Behalf-Of flow.
+The exchange is lazy: `initialize`, `tools/list` and `resources/list` need no
+Graph call and so pay for no exchange. Results are cached per caller and per
+scope set, and concurrent tool calls from one prompt share a single exchange.
+
+This is the only mode with **standing privilege**, and that is the trade. The
+client secret can mint a delegated Graph token for any user whose token this
+service has seen, so compromise of the task, the image or the secret means
+access to those mailboxes, calendars, chats and files with no user present.
+`GRAPH_SCOPES` is the bound on what that credential can obtain: narrow it to the
+permissions the exposed tools need, and a withheld tool becomes a withheld
+permission rather than merely a hidden one.
+
+The assertion must be an **access token** carrying at least one delegated scope.
+Entra refuses an ID token as an on-behalf-of assertion (AADSTS50013), and the
+error this server returns says so.
+
+### verified_identity
+
     MCP client
         |
         | Authorization:        Graph access token   (forwarded)
@@ -30,13 +72,12 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
         v
     Microsoft Graph        (decides what the token may do)
 
-The server holds no client secret, performs no on-behalf-of exchange and has no
-delegated permission of its own, so it cannot act for a user who is not
+The calling application performs the exchange, so this service holds no client
+secret and has no standing privilege: it cannot act for a user who is not
 currently calling it. What a caller may read or write is decided entirely by the
-delegated permissions inside their own Graph token, and enforced by Microsoft
-Graph. No caller state is held, so any task can serve any request.
+delegated permissions inside their own Graph token.
 
-### Why there are two credentials
+### Why verified_identity needs two credentials
 
 The Graph token cannot be verified here, and that is not a limitation of this
 implementation. Microsoft does not publish signing keys for tokens issued to its
@@ -199,7 +240,12 @@ secret is optional and the same Dockerfile builds unchanged without it.
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | AZURE_TENANT_ID | Yes | — | Microsoft Entra tenant ID. A token from another directory is refused |
-| AUTH_MODE | No | graph_passthrough | `verified_identity`, `graph_passthrough` or `disabled`. See Architecture |
+| AUTH_MODE | No | graph_passthrough | `obo`, `verified_identity`, `graph_passthrough` or `disabled`. See Architecture |
+| AZURE_CLIENT_ID | When `obo` | — | This application. The audience the caller's token must name, and the client this service authenticates as |
+| AZURE_CLIENT_SECRET | When `obo` | — | Authenticates the exchange. Supply from a secret store; never logged |
+| GRAPH_SCOPES | No | the full tool set | Comma-separated delegated Graph permissions requested. The bound on what the client secret can obtain |
+| OBO_EXPIRY_MARGIN | No | 5m | How long before expiry a cached delegated token stops being served |
+| ENTRA_TOKEN_URL | No | — | Overrides the token endpoint. Needed only for a sovereign cloud |
 | IDENTITY_AUDIENCES | When verifying | — | Comma-separated accepted `aud` values of the assertion, one per application allowed to vouch for a caller |
 | IDENTITY_ASSERTION_HEADER | No | X-Identity-Assertion | Header carrying the verifiable Entra token |
 | JWKS_REFRESH_INTERVAL | No | 12h | How often the tenant's signing keys are re-read |

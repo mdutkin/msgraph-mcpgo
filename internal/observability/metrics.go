@@ -20,6 +20,9 @@ type Metrics struct {
 	// Token inspection metrics
 	TokenValidationTotal *prometheus.CounterVec
 
+	// On-behalf-of exchange metrics
+	OBOExchangeTotal *prometheus.CounterVec
+
 	// Circuit breaker metrics
 	CircuitBreakerState *prometheus.GaugeVec
 
@@ -98,6 +101,15 @@ func NewMetrics() *Metrics {
 				Help: "Circuit breaker state (0=closed, 1=half-open, 2=open)",
 			},
 			[]string{"service"},
+		),
+
+		// On-behalf-of exchange metrics
+		OBOExchangeTotal: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "obo_exchange_total",
+				Help: "On-behalf-of exchanges, by outcome (cache_hit, exchanged, error)",
+			},
+			[]string{"outcome"},
 		),
 
 		// Rate limiting metrics

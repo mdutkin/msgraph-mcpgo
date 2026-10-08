@@ -72,13 +72,21 @@ func main() {
 		log.Fatal().Err(err).Msg("Invalid authentication configuration")
 	}
 
-	// In verified_identity mode the caller also sends an Entra token that can
-	// be verified, because the Graph token cannot be: Microsoft publishes no
-	// signing keys for tokens issued to its own APIs. Verifying the assertion
-	// is what makes the identity in the audit log and in the rate limit key
-	// Entra's statement rather than the caller's.
-	var identityVerifier *auth.IdentityVerifier
-	if validationMode == auth.ModeVerifiedIdentity {
+	// Both obo and verified_identity verify an Entra token against the
+	// tenant's published signing keys. They differ only in which credential is
+	// verified and what provides the Graph token afterwards, so the key cache
+	// and the verifier are built the same way for each.
+	//
+	// In obo mode the verified token is the caller's own, and its audience must
+	// be this application. In verified_identity mode it is a separate
+	// assertion, and its audience is whichever application vouches for the
+	// caller.
+	var (
+		identityVerifier *auth.IdentityVerifier
+		graphCredentials auth.GraphCredentialProvider = auth.PassthroughProvider{}
+	)
+
+	if validationMode == auth.ModeOBO || validationMode == auth.ModeVerifiedIdentity {
 		// The cache refreshes lazily on access, so it owns no goroutine and
 		// needs no lifetime beyond this call.
 		jwksCache, issuer, err := auth.NewJWKSCache(context.Background(), auth.JWKSConfig{
@@ -92,10 +100,19 @@ func main() {
 			log.Fatal().Err(err).Msg("Failed to read the Entra signing keys")
 		}
 
+		audiences := cfg.IdentityAudiences
+		if validationMode == auth.ModeOBO {
+			// The on-behalf-of grant requires the assertion to have been issued
+			// for the client performing the exchange, so the accepted audience
+			// is this application and nothing else. Both spellings Entra may
+			// put in the claim are accepted.
+			audiences = []string{cfg.AzureClientID, "api://" + cfg.AzureClientID}
+		}
+
 		identityVerifier, err = auth.NewIdentityVerifier(auth.IdentityVerifierConfig{
 			JWKS:      jwksCache,
 			TenantID:  cfg.AzureTenantID,
-			Audiences: cfg.IdentityAudiences,
+			Audiences: audiences,
 			Logger:    &logger,
 		})
 		if err != nil {
@@ -104,9 +121,33 @@ func main() {
 
 		logger.Info().
 			Str("issuer", issuer).
-			Strs("accepted_audiences", cfg.IdentityAudiences).
-			Str("assertion_header", cfg.IdentityAssertionHeader).
-			Msg("Identity assertion verification enabled")
+			Strs("accepted_audiences", audiences).
+			Msg("Token signature verification enabled")
+	}
+
+	if validationMode == auth.ModeOBO {
+		exchanger, err := auth.NewOBOExchanger(auth.OBOConfig{
+			TenantID:     cfg.AzureTenantID,
+			ClientID:     cfg.AzureClientID,
+			ClientSecret: cfg.AzureClientSecret,
+			Scopes:       cfg.GraphScopes,
+			ExpiryMargin: cfg.OBOExpiryMargin,
+			TokenURL:     cfg.EntraTokenURL,
+			Logger:       &logger,
+			Metrics:      metrics,
+		})
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to create the on-behalf-of exchanger")
+		}
+		graphCredentials = exchanger
+
+		// Stated plainly at startup: this is the one mode that holds a
+		// credential, and the scope list is the bound on what that credential
+		// can obtain.
+		logger.Warn().
+			Strs("graph_scopes", exchanger.Scopes()).
+			Msg("On-behalf-of exchange enabled: this service holds a client secret and can obtain " +
+				"delegated Graph access for any user whose token it has seen")
 	}
 
 	// Initialize circuit breaker for MS Graph
@@ -179,6 +220,7 @@ func main() {
 
 	// Initialize MCP server
 	mcpServer, err := mcp.NewServer(mcp.ServerConfig{
+		GraphCredentials:    graphCredentials,
 		AttachmentExtractor: attachments.New(),
 		CircuitBreaker:      circuitBreaker,
 		Logger:              &logger,

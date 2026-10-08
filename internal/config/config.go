@@ -51,12 +51,37 @@ type Config struct {
 
 	// Microsoft Entra ID
 	//
-	// Only the tenant is needed. This service forwards the caller's Microsoft
-	// Graph access token and holds no credential of its own, so there is no
-	// client ID to be an audience for and no client secret to exchange with.
-	// The tenant is used to reject a token from a different directory early
-	// and to name the authorization server in the published resource metadata.
+	// The tenant is always required: it bounds which directory's tokens are
+	// accepted and names the authorization server in the published resource
+	// metadata. The client ID and secret are needed only for AUTH_MODE=obo.
 	AzureTenantID string `env:"AZURE_TENANT_ID,required"`
+
+	// AzureClientID is this service's own application. Required when
+	// AUTH_MODE=obo: it is the audience the caller's token must name, and the
+	// client this service authenticates as during the exchange.
+	AzureClientID string `env:"AZURE_CLIENT_ID"`
+
+	// AzureClientSecret authenticates this service to the token endpoint.
+	// Required when AUTH_MODE=obo and never logged.
+	//
+	// Holding it is what gives this service standing privilege: it can mint a
+	// delegated Graph token for any user whose assertion the service has seen.
+	// Supply it from a secret store, never from an image or a task definition
+	// literal.
+	AzureClientSecret string `env:"AZURE_CLIENT_SECRET"`
+
+	// GraphScopes are the delegated Microsoft Graph permissions requested
+	// during the exchange, comma separated. Empty selects the full set the
+	// tools need.
+	//
+	// Narrowing this is the lever that makes a withheld tool also a withheld
+	// permission: excluding search_emails in the tool policy stops the model
+	// calling it, while removing Mail.Read here stops the token being able to.
+	GraphScopes []string `env:"GRAPH_SCOPES" envSeparator:","`
+
+	// OBOExpiryMargin is how long before true expiry a cached delegated token
+	// stops being served.
+	OBOExpiryMargin time.Duration `env:"OBO_EXPIRY_MARGIN" envDefault:"5m"`
 
 	// MaxRequestBytes bounds an MCP request body. The transport reads a body
 	// in full, so without a bound one request can allocate as much memory as
@@ -103,6 +128,14 @@ type Config struct {
 	//
 	// AuthMode selects how a caller is authenticated:
 	//
+	//   obo                The caller sends an access token issued for this API.
+	//                      Its signature is verified against the tenant's
+	//                      published keys, then it is exchanged through the
+	//                      On-Behalf-Of flow for a delegated Graph token.
+	//                      Requires AzureClientID and AzureClientSecret, and is
+	//                      the only mode in which this service holds a
+	//                      credential of its own.
+	//
 	//   verified_identity  The caller sends a Graph token in Authorization and
 	//                      an Entra identity assertion in IdentityAssertionHeader.
 	//                      The assertion's signature is verified against the
@@ -128,6 +161,11 @@ type Config struct {
 	// application allowed to vouch for a caller. For LibreChat's OpenID ID
 	// token this is the LibreChat client ID.
 	IdentityAudiences []string `env:"IDENTITY_AUDIENCES" envSeparator:","`
+
+	// EntraTokenURL overrides the token endpoint used for the on-behalf-of
+	// exchange. Leave empty for the public cloud; a sovereign cloud needs its
+	// own authority.
+	EntraTokenURL string `env:"ENTRA_TOKEN_URL"`
 
 	// EntraDiscoveryURL overrides the OpenID configuration URL the signing keys
 	// are discovered through. Leave empty for the public cloud. A sovereign
@@ -202,6 +240,15 @@ func (c *Config) Validate() error {
 	}
 
 	switch c.AuthMode {
+	case "obo":
+		if c.AzureClientID == "" {
+			problems = append(problems, "AZURE_CLIENT_ID is required when AUTH_MODE=obo: it is the "+
+				"audience the caller's token must name and the client this service authenticates as")
+		}
+		if c.AzureClientSecret == "" {
+			problems = append(problems, "AZURE_CLIENT_SECRET is required when AUTH_MODE=obo: the "+
+				"on-behalf-of grant authenticates this service as a confidential client")
+		}
 	case "verified_identity":
 		if len(c.IdentityAudiences) == 0 {
 			problems = append(problems, "IDENTITY_AUDIENCES is required when AUTH_MODE=verified_identity: "+

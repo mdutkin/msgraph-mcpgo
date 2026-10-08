@@ -199,3 +199,60 @@ func TestInternalExposureRelaxesPublicURLScheme(t *testing.T) {
 		})
 	}
 }
+
+// The on-behalf-of mode is the only one that needs a credential of its own, and
+// it must not start without one: a missing secret would otherwise surface as a
+// Graph failure on the first tool call rather than at startup.
+func TestOBOModeRequiresClientCredentials(t *testing.T) {
+	baseEnv(t)
+	t.Setenv("AUTH_MODE", "obo")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("obo was accepted with no client ID or secret")
+	}
+
+	t.Setenv("AZURE_CLIENT_ID", "84c5342b-e02e-4d5e-a8b4-32e86a769b5e")
+	if _, err := Load(); err == nil {
+		t.Fatal("obo was accepted with no client secret")
+	}
+
+	t.Setenv("AZURE_CLIENT_SECRET", "a-secret")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("a complete obo configuration was refused: %v", err)
+	}
+	if cfg.AzureClientID == "" || cfg.AzureClientSecret == "" {
+		t.Fatal("client credentials were not loaded")
+	}
+}
+
+// The other modes hold no credential, so they must not demand one.
+func TestNonOBOModesDoNotRequireClientCredentials(t *testing.T) {
+	for _, mode := range []string{"graph_passthrough", "verified_identity"} {
+		t.Run(mode, func(t *testing.T) {
+			baseEnv(t)
+			t.Setenv("AUTH_MODE", mode)
+			t.Setenv("IDENTITY_AUDIENCES", "55555555-5555-5555-5555-555555555555")
+
+			if _, err := Load(); err != nil {
+				t.Fatalf("%s required client credentials: %v", mode, err)
+			}
+		})
+	}
+}
+
+func TestGraphScopesAreCommaSeparated(t *testing.T) {
+	baseEnv(t)
+	t.Setenv("AUTH_MODE", "obo")
+	t.Setenv("AZURE_CLIENT_ID", "84c5342b-e02e-4d5e-a8b4-32e86a769b5e")
+	t.Setenv("AZURE_CLIENT_SECRET", "a-secret")
+	t.Setenv("GRAPH_SCOPES", "https://graph.microsoft.com/User.Read,https://graph.microsoft.com/Calendars.Read")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.GraphScopes) != 2 {
+		t.Fatalf("scopes parsed as %v", cfg.GraphScopes)
+	}
+}

@@ -22,6 +22,7 @@ import (
 // Server is the MCP server implementation
 type Server struct {
 	mcpServer           *server.MCPServer
+	graphCredentials    auth.GraphCredentialProvider
 	graphClientConfig   msgraph.ClientConfig
 	attachmentExtractor *attachments.Extractor
 	circuitBreaker      *gobreaker.CircuitBreaker
@@ -33,6 +34,10 @@ type Server struct {
 
 // ServerConfig holds configuration for creating an MCP server
 type ServerConfig struct {
+	// GraphCredentials turns the caller's credential into one usable against
+	// Microsoft Graph. A nil value forwards the caller's token unchanged.
+	GraphCredentials auth.GraphCredentialProvider
+
 	AttachmentExtractor *attachments.Extractor
 	CircuitBreaker      *gobreaker.CircuitBreaker
 	Logger              *zerolog.Logger
@@ -61,7 +66,13 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		cfg.EndpointPath = DefaultEndpointPath
 	}
 
+	graphCredentials := cfg.GraphCredentials
+	if graphCredentials == nil {
+		graphCredentials = auth.PassthroughProvider{}
+	}
+
 	s := &Server{
+		graphCredentials:    graphCredentials,
 		attachmentExtractor: cfg.AttachmentExtractor,
 		circuitBreaker:      cfg.CircuitBreaker,
 		logger:              cfg.Logger,
@@ -268,21 +279,26 @@ func (s *Server) Handler(opts ...server.StreamableHTTPOption) http.Handler {
 
 // getGraphClient builds a Microsoft Graph client for the calling user.
 //
-// The caller's Graph access token is forwarded unchanged. There is no
-// on-behalf-of exchange and no credential of this service involved, so the
-// client can do exactly what the caller's own delegated permissions allow and
-// nothing more. Graph enforces that, which is why the server needs no client
-// secret and cannot act for a user who is not currently calling it.
+// The Graph credential is obtained here rather than during authentication, so
+// that a request which needs no Graph call — initialize, tools/list,
+// resources/list — costs no token exchange. Whether that means forwarding the
+// caller's own token or exchanging it on their behalf is the provider's
+// decision, not this layer's.
 //
-// A client is built per request rather than cached. The token is the caller's,
-// so a shared client would serve one user's credential to another.
+// A client is built per request and never cached. The credential belongs to the
+// caller, so a shared client would serve one user's token to another.
 func (s *Server) getGraphClient(ctx context.Context) (*msgraph.Client, error) {
-	// The token is placed in the context by the authentication middleware.
-	// Its absence means the request bypassed authentication, which is a bug
-	// rather than an anonymous caller, so it fails closed.
-	graphToken, ok := auth.TokenFromContext(ctx)
+	// The credential is placed in the context by the authentication
+	// middleware. Its absence means the request bypassed authentication, which
+	// is a bug rather than an anonymous caller, so it fails closed.
+	callerToken, ok := auth.TokenFromContext(ctx)
 	if !ok {
 		return nil, apperrors.NewTokenValidationError(fmt.Errorf("no caller credential in context"))
+	}
+
+	graphToken, err := s.graphCredentials.GraphToken(ctx, callerToken)
+	if err != nil {
+		return nil, apperrors.NewTokenValidationError(err)
 	}
 
 	cfg := s.graphClientConfig
