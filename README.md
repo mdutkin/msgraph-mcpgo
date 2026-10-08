@@ -90,7 +90,6 @@ Default endpoints:
 
 - MCP: http://localhost:8080/mcp
 - Protected resource metadata: http://localhost:8080/.well-known/oauth-protected-resource
-- Browser test console: http://localhost:8080/test
 - Liveness: http://localhost:8080/health/live
 - Readiness: http://localhost:8080/health/ready
 - Prometheus metrics: http://localhost:9090/metrics
@@ -145,7 +144,21 @@ Call an authenticated tool:
       -H "Content-Type: application/json" \
       -d "{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_emails","arguments":{"query":"subject:project","top":10}}}"
 
-The browser console at /test supports the Entra device-code flow through /auth/devicecode and /auth/token.
+### Development console
+
+A browser console at /test, backed by an Entra device-code proxy at
+/auth/devicecode and /auth/token, is available only in a build made with the
+`devconsole` tag:
+
+    make run-console
+
+These three routes are unauthenticated by necessity, because their purpose is
+to obtain the first token. They are excluded from a normal build by build tag,
+so they are absent from the release binary and no misconfiguration can expose
+them. Do not build with this tag for any shared or deployed environment: an
+open device-code proxy for a confidential client lets a caller start a flow for
+this application, persuade an employee to approve the code, and then collect a
+delegated token for that employee's mailbox.
 
 ## MCP tools
 

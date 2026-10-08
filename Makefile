@@ -24,6 +24,10 @@ test: ## Run all tests with race detector and coverage
 	@echo "Running tests..."
 	go test -v -race -cover -coverprofile=coverage.out ./...
 
+test-tags: ## Verify the devconsole build also compiles and vets
+	go build -tags devconsole ./...
+	go vet -tags devconsole ./...
+
 test-short: ## Run tests without integration tests
 	@echo "Running short tests..."
 	go test -v -short -race ./...
@@ -48,6 +52,10 @@ vet: ## Run go vet
 run: ## Run the server locally
 	@echo "Starting server..."
 	go run $(MAIN_PATH)
+
+run-console: ## Run the server with the browser test console at /test (developer machines only)
+	@echo "Starting server with the development console enabled..."
+	go run -tags devconsole $(MAIN_PATH)
 
 dev: ## Run the server with hot reload (requires air)
 	@echo "Starting server with hot reload..."

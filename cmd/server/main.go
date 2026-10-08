@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -187,18 +186,10 @@ func main() {
 	mux.HandleFunc("/health/live", healthHandler.LivenessHandler)
 	mux.HandleFunc("/health/ready", healthHandler.ReadinessHandler)
 
-	// Test console (static)
-	mux.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "static/test.html")
-	})
-
-	// Auth proxy endpoints (avoids CORS issues with Azure AD from browser)
-	authProxy := &authProxyHandler{
-		tenantID: cfg.AzureTenantID,
-		clientID: cfg.AzureClientID,
-	}
-	mux.HandleFunc("/auth/devicecode", authProxy.deviceCode)
-	mux.HandleFunc("/auth/token", authProxy.token)
+	// The browser test console and its Entra device-code proxy are compiled in
+	// only under the "devconsole" build tag. In a release build this call is a
+	// no-op and the handlers do not exist in the binary.
+	registerDevConsole(mux, cfg, &logger)
 
 	// Create HTTP server
 	httpServer := &http.Server{
@@ -264,70 +255,4 @@ func main() {
 	}
 
 	logger.Info().Msg("Server stopped gracefully")
-}
-
-// authProxyHandler proxies device code auth requests to Azure AD (avoids browser CORS issues)
-type authProxyHandler struct {
-	tenantID string
-	clientID string
-}
-
-func (h *authProxyHandler) deviceCode(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	scopes := r.FormValue("scope")
-	if scopes == "" {
-		scopes = fmt.Sprintf("%s/.default offline_access", h.clientID)
-	}
-
-	resp, err := http.PostForm(
-		fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/devicecode", h.tenantID),
-		map[string][]string{
-			"client_id": {h.clientID},
-			"scope":     {scopes},
-		},
-	)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
-}
-
-func (h *authProxyHandler) token(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	deviceCode := r.FormValue("device_code")
-	if deviceCode == "" {
-		http.Error(w, "device_code required", http.StatusBadRequest)
-		return
-	}
-
-	resp, err := http.PostForm(
-		fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", h.tenantID),
-		map[string][]string{
-			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
-			"client_id":   {h.clientID},
-			"device_code": {deviceCode},
-		},
-	)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
 }

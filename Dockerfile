@@ -23,9 +23,6 @@ RUN apk add --no-cache ca-certificates tzdata
 # Copy the binary
 COPY --from=builder /build/server /server
 
-# Copy static assets served at /test
-COPY --from=builder /build/static /static
-
 EXPOSE 8080 9090
 
 ENTRYPOINT ["/server"]
