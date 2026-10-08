@@ -18,6 +18,7 @@ import (
 	"github.com/fnfbraga/msgraph-mcpgo/internal/mcp"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/observability"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/ratelimit"
+	"github.com/fnfbraga/msgraph-mcpgo/internal/toolpolicy"
 	apperrors "github.com/fnfbraga/msgraph-mcpgo/pkg/errors"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -117,6 +118,24 @@ func main() {
 		},
 	})
 
+	// Resolve which tools and resources this deployment exposes. Done before
+	// the server is built so a bad policy file stops startup rather than
+	// producing a server with the wrong surface.
+	policyPath := cfg.ToolPolicyFile
+	policyExplicit := policyPath != ""
+	if !policyExplicit {
+		policyPath = toolpolicy.DefaultFile
+	}
+
+	policy, err := toolpolicy.Load(policyPath, policyExplicit, mcp.KnownToolNames(), mcp.KnownResourceURIs())
+	if err != nil {
+		log.Fatal().Err(err).Str("tool_policy_file", policyPath).Msg("Failed to load tool policy")
+	}
+	logger.Info().
+		Str("tool_policy_file", policyPath).
+		Bool("tool_policy_present", policyExplicit).
+		Msg("Tool policy resolved")
+
 	// Initialize MCP server
 	mcpServer, err := mcp.NewServer(mcp.ServerConfig{
 		TokenValidator:      tokenValidator,
@@ -128,6 +147,7 @@ func main() {
 		GraphTimeout:        cfg.GraphTimeout,
 		DisableAuth:         cfg.DisableAuth,
 		SkipTokenValidation: cfg.SkipTokenValidation,
+		Policy:              policy,
 		Stateless:           cfg.MCPStateless,
 		EndpointPath:        mcp.DefaultEndpointPath,
 	})

@@ -24,6 +24,13 @@ type Config struct {
 	// the hostname clients actually connect to, not the container address.
 	PublicURL string `env:"PUBLIC_URL" envDefault:"http://localhost:8080"`
 
+	// ToolPolicyFile points at the YAML document that decides which tools and
+	// resources this deployment exposes. When the variable is set, a missing
+	// file is a startup error. When it is unset, a missing file at the default
+	// path exposes everything, which preserves the behaviour of a deployment
+	// that has no policy.
+	ToolPolicyFile string `env:"TOOL_POLICY_FILE"`
+
 	// MCPStateless keeps the Streamable HTTP transport free of per-session
 	// state. Required whenever more than one task serves the same load
 	// balancer target group, because session state lives in task memory.

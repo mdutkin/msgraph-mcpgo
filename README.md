@@ -104,6 +104,7 @@ Default endpoints:
 | ENVIRONMENT | No | production | Runtime environment; development enables development logging |
 | SERVER_PORT | No | 8080 | HTTP server port |
 | PUBLIC_URL | No | http://localhost:8080 | Externally reachable base URL. Published as the OAuth protected resource identifier and in every 401 challenge |
+| TOOL_POLICY_FILE | No | tools.yaml | YAML document selecting which tools and resources are exposed. When set, a missing file stops startup |
 | MCP_STATELESS | No | true | Keep the Streamable HTTP transport free of per-session state. Required when more than one task serves a load balancer target group |
 | METRICS_PORT | No | 9090 | Prometheus metrics port |
 | GRAPH_TIMEOUT | No | 60s | Microsoft Graph operation timeout |
@@ -170,6 +171,53 @@ them. Do not build with this tag for any shared or deployed environment: an
 open device-code proxy for a confidential client lets a caller start a flow for
 this application, persuade an employee to approve the code, and then collect a
 delegated token for that employee's mailbox.
+
+## Exposing a subset of the tools
+
+The binary implements every tool listed below, but a deployment decides which
+of them to expose. Copy `tools.example.yaml` to `tools.yaml`, or point
+`TOOL_POLICY_FILE` at a path:
+
+    tools:
+      default: all
+      exclude:
+        - search_emails
+        - read_email
+        - send_email
+
+    resources:
+      default: all
+      exclude:
+        - msgraph://emails
+
+Two shapes are accepted, and mixing them is an error:
+
+| Shape | Meaning |
+| --- | --- |
+| `default: all` with `exclude` | Expose everything except the listed entries |
+| `default: none` with `include` | Expose only the listed entries |
+
+Omitting `default` means `all`, so a file that lists only exclusions reads the
+way it behaves.
+
+A withheld tool is never registered with the MCP server. It is absent from
+`tools/list`, and a call naming it is answered by the protocol layer with
+`tool 'search_emails' not found`. There is no filter for a caller to bypass.
+
+Every name in the file is checked against the tools the binary implements, and
+an unrecognised name stops startup. This matters: a typo such as
+`search_email` for `search_emails` would otherwise leave mailbox search
+exposed while the file states it is withheld. Misspelled keys are rejected for
+the same reason.
+
+Withhold the matching resource whenever you withhold a tool. The three
+resources expose recent mail, recent files and upcoming events through a
+separate interface, so excluding the mail tools alone still leaves mailbox
+content reachable at `msgraph://emails`.
+
+When `TOOL_POLICY_FILE` is unset and `tools.yaml` is absent, everything is
+exposed. Set the variable explicitly in a deployed environment so that a
+missing file fails instead of silently exposing the full surface.
 
 ## MCP tools
 

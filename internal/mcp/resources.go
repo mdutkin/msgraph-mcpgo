@@ -4,6 +4,16 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
+// KnownResourceURIs returns the URIs of every resource this build implements.
+func KnownResourceURIs() []string {
+	resources := DefineMCPResources()
+	uris := make([]string, 0, len(resources))
+	for _, resource := range resources {
+		uris = append(uris, resource.URI)
+	}
+	return uris
+}
+
 // DefineMCPResources returns all MCP resource definitions
 func DefineMCPResources() []mcp.Resource {
 	return []mcp.Resource{

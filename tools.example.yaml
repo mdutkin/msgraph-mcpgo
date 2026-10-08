@@ -1,0 +1,57 @@
+# Which MCP tools and resources this deployment exposes.
+#
+# Copy to tools.yaml, or point TOOL_POLICY_FILE at a path of your choosing.
+# When TOOL_POLICY_FILE is set, a missing file stops startup. When it is unset
+# and tools.yaml is absent, every tool and resource is exposed.
+#
+# A withheld tool is never registered: it does not appear in tools/list, and a
+# call naming it is answered with "tool not found" by the protocol layer. There
+# is no filter to bypass.
+#
+# Every name is checked against the tools the binary implements. A misspelled
+# name stops startup rather than leaving the tool quietly exposed.
+#
+# Two shapes are accepted, and mixing them is an error:
+#
+#   default: all   + exclude: [...]   expose everything except the list
+#   default: none  + include: [...]   expose only the list
+#
+# Omitting "default" means "all".
+
+tools:
+  default: all
+  exclude:
+    # Mailbox content is withheld until the data review completes. The build
+    # implements these; this deployment does not offer them.
+    - search_emails
+    - get_email_details
+    - read_email
+    - download_attachment
+
+    # Outbound actions are withheld until change control signs them off.
+    # Each one writes to Microsoft 365 on the user's behalf.
+    - send_email
+    - send_teams_message
+    - schedule_meeting
+    - upload_file
+
+resources:
+  default: all
+  exclude:
+    # Withholding the mail tools above without this would leave the same
+    # mailbox content reachable through the resource interface.
+    - msgraph://emails
+
+# The full set of tool names, for reference:
+#
+#   search_emails              get_email_details          read_email
+#   download_attachment        send_email                 get_calendar_events
+#   get_user_availability      schedule_meeting           list_chats
+#   get_chat_messages          send_teams_message         get_meeting_transcript
+#   list_recent_files          extract_file_content       upload_file
+#   search_sharepoint          list_sharepoint_drives     get_sharepoint_page_content
+#   search_users               get_user_org_chart         find_experts
+#
+# Resource URIs:
+#
+#   msgraph://emails           msgraph://files            msgraph://calendar

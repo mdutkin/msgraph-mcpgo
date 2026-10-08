@@ -11,6 +11,7 @@ import (
 	"github.com/fnfbraga/msgraph-mcpgo/internal/auth"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/msgraph"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/observability"
+	"github.com/fnfbraga/msgraph-mcpgo/internal/toolpolicy"
 	apperrors "github.com/fnfbraga/msgraph-mcpgo/pkg/errors"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -45,6 +46,10 @@ type ServerConfig struct {
 	GraphTimeout        time.Duration
 	DisableAuth         bool
 	SkipTokenValidation bool
+
+	// Policy decides which tools and resources are registered. A nil policy
+	// registers everything.
+	Policy *toolpolicy.Policy
 
 	// Stateless disables per-session transport state. Keep it true for any
 	// deployment with more than one task behind a load balancer.
@@ -91,23 +96,41 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		server.WithLogging(),
 	)
 
-	// Register tools
-	tools := DefineMCPTools()
-	for _, tool := range tools {
+	// Register only what policy exposes. A withheld tool is never added, so
+	// it does not appear in tools/list and the protocol layer answers a call
+	// naming it with "tool not found". Nothing is left behind for a caller to
+	// reach by guessing the name.
+	var registeredTools, withheldTools []string
+	for _, tool := range DefineMCPTools() {
+		if !cfg.Policy.ToolEnabled(tool.Name) {
+			withheldTools = append(withheldTools, tool.Name)
+			continue
+		}
 		mcpServer.AddTool(tool, s.createToolHandler(tool.Name))
+		registeredTools = append(registeredTools, tool.Name)
 	}
 
-	// Register resources
-	resources := DefineMCPResources()
-	for _, resource := range resources {
+	var registeredResources, withheldResources []string
+	for _, resource := range DefineMCPResources() {
+		if !cfg.Policy.ResourceEnabled(resource.URI) {
+			withheldResources = append(withheldResources, resource.URI)
+			continue
+		}
 		mcpServer.AddResource(resource, s.createResourceHandler(resource.URI))
+		registeredResources = append(registeredResources, resource.URI)
+	}
+
+	if len(registeredTools) == 0 && len(registeredResources) == 0 {
+		return nil, fmt.Errorf("tool policy exposes no tools and no resources; the server would have nothing to serve")
 	}
 
 	s.mcpServer = mcpServer
 
 	cfg.Logger.Info().
-		Int("tool_count", len(tools)).
-		Int("resource_count", len(resources)).
+		Strs("tools", registeredTools).
+		Strs("withheld_tools", withheldTools).
+		Strs("resources", registeredResources).
+		Strs("withheld_resources", withheldResources).
 		Msg("MCP server initialized")
 
 	return s, nil

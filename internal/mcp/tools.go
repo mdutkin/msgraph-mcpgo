@@ -4,6 +4,17 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
+// KnownToolNames returns the names of every tool this build implements. It is
+// the authority a tool policy file is validated against.
+func KnownToolNames() []string {
+	tools := DefineMCPTools()
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	return names
+}
+
 // DefineMCPTools returns all MCP tool definitions
 func DefineMCPTools() []mcp.Tool {
 	return []mcp.Tool{
