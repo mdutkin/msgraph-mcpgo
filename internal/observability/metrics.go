@@ -29,6 +29,9 @@ type Metrics struct {
 	// Circuit breaker metrics
 	CircuitBreakerState *prometheus.GaugeVec
 
+	// Rate limiting metrics
+	RateLimitThrottled *prometheus.CounterVec
+
 	// Attachment extraction metrics
 	AttachmentExtractionTotal   *prometheus.CounterVec
 	AttachmentExtractionLatency *prometheus.HistogramVec
@@ -132,6 +135,15 @@ func NewMetrics() *Metrics {
 				Help: "Circuit breaker state (0=closed, 1=half-open, 2=open)",
 			},
 			[]string{"service"},
+		),
+
+		// Rate limiting metrics
+		RateLimitThrottled: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "rate_limit_throttled_total",
+				Help: "Requests rejected by the per-user rate limiter",
+			},
+			[]string{"path"},
 		),
 
 		// Attachment extraction metrics

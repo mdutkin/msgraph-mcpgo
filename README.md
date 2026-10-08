@@ -13,7 +13,7 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 - Teams chat retrieval and sending
 - OneDrive and SharePoint search, upload, page reading, and document extraction
 - Directory search, organization charts, and expert discovery
-- Retries, circuit breaking, structured logs, health checks, and Prometheus metrics
+- Per-user rate limiting, retries, circuit breaking, structured logs, health checks, and Prometheus metrics
 
 ## Architecture
 
@@ -110,7 +110,9 @@ Default endpoints:
 | TOKEN_CACHE_TTL | No | 5m | Token cache lifetime |
 | JWKS_CACHE_TTL | No | 24h | Entra JWKS cache lifetime |
 | LOG_LEVEL | No | info | Structured logging level |
-| RATE_LIMIT_PER_USER | No | 100 | Configured per-user request limit |
+| RATE_LIMIT_PER_USER | No | 100 | Sustained requests per minute per user, per task. 0 disables throttling |
+| RATE_LIMIT_BURST | No | 0 | Back-to-back requests allowed before the sustained rate applies. 0 selects a quarter of RATE_LIMIT_PER_USER, floor 5 |
+| RATE_LIMIT_IDLE_TTL | No | 15m | Retention for an unused per-user bucket |
 | DISABLE_AUTH | No | false | Development-only authentication bypass |
 | SKIP_TOKEN_VALIDATION | No | false | Skip local JWT verification; Graph still validates during OBO |
 

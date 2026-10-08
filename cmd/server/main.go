@@ -17,6 +17,7 @@ import (
 	"github.com/fnfbraga/msgraph-mcpgo/internal/health"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/mcp"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/observability"
+	"github.com/fnfbraga/msgraph-mcpgo/internal/ratelimit"
 	apperrors "github.com/fnfbraga/msgraph-mcpgo/pkg/errors"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -162,9 +163,23 @@ func main() {
 	// Setup HTTP server
 	mux := http.NewServeMux()
 
+	// Per-user throttling sits inside authentication, because it keys on the
+	// identity the middleware establishes.
+	userLimiter := ratelimit.New(ratelimit.Config{
+		RequestsPerMinute: cfg.RateLimitPerUser,
+		Burst:             cfg.RateLimitBurst,
+		IdleTTL:           cfg.RateLimitIdleTTL,
+		Logger:            &logger,
+		Metrics:           metrics,
+	})
+	if userLimiter == nil {
+		logger.Warn().Msg("Per-user rate limiting is disabled (RATE_LIMIT_PER_USER=0)")
+	}
+
 	// MCP endpoint. The Streamable HTTP transport handles POST, GET and
 	// DELETE itself, so the mux must not filter by method.
-	mux.Handle(mcp.DefaultEndpointPath, authMiddleware.Handler(mcpServer.Handler()))
+	mux.Handle(mcp.DefaultEndpointPath,
+		authMiddleware.Handler(userLimiter.Handler(mcpServer.Handler())))
 
 	// OAuth 2.0 Protected Resource Metadata (RFC 9728). This document is
 	// intentionally public: it is how an MCP client that receives a 401

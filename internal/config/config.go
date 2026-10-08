@@ -46,7 +46,20 @@ type Config struct {
 	MetricsPort int    `env:"METRICS_PORT" envDefault:"9090"`
 
 	// Rate Limiting
+	//
+	// RateLimitPerUser is the sustained request allowance for one user, per
+	// minute, per task. Zero disables throttling. The limit is not shared
+	// between tasks; see internal/ratelimit for why.
 	RateLimitPerUser int `env:"RATE_LIMIT_PER_USER" envDefault:"100"`
+
+	// RateLimitBurst is how many requests a user may issue back to back
+	// before the sustained rate applies. One MCP prompt often produces
+	// several tool calls, so too small a burst throttles normal use. Zero
+	// selects a quarter of RateLimitPerUser, with a floor of five.
+	RateLimitBurst int `env:"RATE_LIMIT_BURST" envDefault:"0"`
+
+	// RateLimitIdleTTL is how long an unused per-user bucket is retained.
+	RateLimitIdleTTL time.Duration `env:"RATE_LIMIT_IDLE_TTL" envDefault:"15m"`
 
 	// Testing
 	//
