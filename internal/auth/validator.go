@@ -53,9 +53,11 @@ func (v *TokenValidator) ValidateToken(ctx context.Context, tokenString string) 
 		v.metrics.TokenValidationLatency.WithLabelValues("total").Observe(duration)
 	}()
 
-	// Check cache first
-	cacheKey := fmt.Sprintf("token:%s", tokenString)
-	if cached, found := v.claimsCache.Get(cacheKey); found {
+	// Check cache first. The key is a digest, never the token itself: a cache
+	// keyed on the raw token keeps every live bearer credential readable in
+	// process memory, and in any heap dump taken from the task.
+	key := cacheKey("claims", tokenString)
+	if cached, found := v.claimsCache.Get(key); found {
 		v.logger.Debug().Msg("Token claims retrieved from cache")
 		v.metrics.TokenValidationTotal.WithLabelValues("success_cached").Inc()
 		v.metrics.CacheHits.WithLabelValues("token_validation").Inc()
@@ -78,7 +80,7 @@ func (v *TokenValidator) ValidateToken(ctx context.Context, tokenString string) 
 	// TTL = token expiration - 5 minutes (safety margin)
 	ttl := claims.ExpiresIn() - 5*time.Minute
 	if ttl > 0 {
-		v.claimsCache.Set(cacheKey, claims, ttl)
+		v.claimsCache.Set(key, claims, ttl)
 		v.logger.Debug().
 			Dur("ttl", ttl).
 			Msg("Token claims cached")

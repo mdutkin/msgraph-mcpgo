@@ -105,13 +105,11 @@ func (e *OBOExchanger) ExchangeForGraphToken(ctx context.Context, incomingToken 
 		logger.Debug().Err(err).Msg("Could not parse incoming token payload for OBO debug")
 	}
 
-	// Use token hash as cache key to avoid storing full token in key
-	cacheKey := fmt.Sprintf("obo:%d", len(incomingToken))
-	if len(incomingToken) > 20 {
-		cacheKey = fmt.Sprintf("obo:%s", incomingToken[len(incomingToken)-20:])
-	}
+	// The key must bind the whole assertion and the requested scope set. See
+	// cacheKey for why a suffix of the token is not an acceptable key.
+	key := cacheKey("obo", incomingToken, scopeDiscriminator(e.scopes))
 
-	if cached, found := e.tokenCache.Get(cacheKey); found {
+	if cached, found := e.tokenCache.Get(key); found {
 		logger.Debug().Msg("OBO token retrieved from cache")
 		return cached.(string), nil
 	}
@@ -124,7 +122,7 @@ func (e *OBOExchanger) ExchangeForGraphToken(ctx context.Context, incomingToken 
 	// Cache with margin before expiry
 	ttl := time.Duration(expiresIn-60) * time.Second
 	if ttl > 0 {
-		e.tokenCache.Set(cacheKey, token, ttl)
+		e.tokenCache.Set(key, token, ttl)
 	}
 
 	logger.Debug().Msg("OBO token exchange successful")
