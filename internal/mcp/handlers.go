@@ -11,6 +11,7 @@ import (
 
 	"github.com/fnfbraga/msgraph-mcpgo/internal/attachments"
 	"github.com/fnfbraga/msgraph-mcpgo/internal/msgraph"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // handleSearchEmails handles the search_emails tool
@@ -460,7 +461,7 @@ func (s *Server) handleSearchUsers(ctx context.Context, args map[string]interfac
 }
 
 // handleResourceRead handles reading a resource
-func (s *Server) handleResourceRead(ctx context.Context, uri string) (interface{}, error) {
+func (s *Server) handleResourceRead(ctx context.Context, uri string) (mcp.TextResourceContents, error) {
 	s.logger.Info().
 		Str("uri", uri).
 		Msg("Reading resource")
@@ -468,7 +469,7 @@ func (s *Server) handleResourceRead(ctx context.Context, uri string) (interface{
 	// Get Graph client from context
 	graphClient, err := s.getGraphClient(ctx)
 	if err != nil {
-		return nil, err
+		return mcp.TextResourceContents{}, err
 	}
 
 	// Parse URI and route to appropriate handler
@@ -476,33 +477,33 @@ func (s *Server) handleResourceRead(ctx context.Context, uri string) (interface{
 	case "msgraph://emails":
 		emails, err := graphClient.GetEmails(ctx, 50, "")
 		if err != nil {
-			return nil, err
+			return mcp.TextResourceContents{}, err
 		}
 		// Convert to JSON
 		data, err := json.Marshal(emails)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal emails: %w", err)
+			return mcp.TextResourceContents{}, fmt.Errorf("failed to marshal emails: %w", err)
 		}
-		return map[string]interface{}{
-			"uri":      uri,
-			"mimeType": "application/json",
-			"text":     string(data),
+		return mcp.TextResourceContents{
+			URI:      uri,
+			MIMEType: "application/json",
+			Text:     string(data),
 		}, nil
 
 	case "msgraph://files":
 		files, err := graphClient.GetRecentFiles(ctx, 50)
 		if err != nil {
-			return nil, err
+			return mcp.TextResourceContents{}, err
 		}
 		// Convert to JSON
 		data, err := json.Marshal(files)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal files: %w", err)
+			return mcp.TextResourceContents{}, fmt.Errorf("failed to marshal files: %w", err)
 		}
-		return map[string]interface{}{
-			"uri":      uri,
-			"mimeType": "application/json",
-			"text":     string(data),
+		return mcp.TextResourceContents{
+			URI:      uri,
+			MIMEType: "application/json",
+			Text:     string(data),
 		}, nil
 
 	case "msgraph://calendar":
@@ -510,21 +511,21 @@ func (s *Server) handleResourceRead(ctx context.Context, uri string) (interface{
 		end := start.AddDate(0, 0, 30)
 		events, err := graphClient.GetCalendarEvents(ctx, start, end, "")
 		if err != nil {
-			return nil, err
+			return mcp.TextResourceContents{}, err
 		}
 		// Convert to JSON
 		data, err := json.Marshal(events)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal events: %w", err)
+			return mcp.TextResourceContents{}, fmt.Errorf("failed to marshal events: %w", err)
 		}
-		return map[string]interface{}{
-			"uri":      uri,
-			"mimeType": "application/json",
-			"text":     string(data),
+		return mcp.TextResourceContents{
+			URI:      uri,
+			MIMEType: "application/json",
+			Text:     string(data),
 		}, nil
 
 	default:
-		return nil, fmt.Errorf("unknown resource URI: %s", uri)
+		return mcp.TextResourceContents{}, fmt.Errorf("unknown resource URI: %s", uri)
 	}
 }
 

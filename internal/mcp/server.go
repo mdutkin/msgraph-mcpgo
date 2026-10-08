@@ -124,10 +124,11 @@ func (s *Server) createToolHandler(toolName string) server.ToolHandlerFunc {
 			}
 		}()
 
-		// Parse arguments
-		args := make(map[string]interface{})
-		if request.Params.Arguments != nil {
-			args = request.Params.Arguments
+		// Parse arguments. As of mcp-go v1, Params.Arguments is `any`;
+		// GetArguments asserts it back to a map and yields nil otherwise.
+		args := request.GetArguments()
+		if args == nil {
+			args = make(map[string]interface{})
 		}
 
 		// Route to appropriate handler
@@ -196,7 +197,7 @@ func (s *Server) createToolHandler(toolName string) server.ToolHandlerFunc {
 		}
 
 		return &mcp.CallToolResult{
-			Content: []interface{}{
+			Content: []mcp.Content{
 				mcp.TextContent{
 					Type: "text",
 					Text: string(resultJSON),
@@ -208,19 +209,18 @@ func (s *Server) createToolHandler(toolName string) server.ToolHandlerFunc {
 
 // createResourceHandler creates a handler for a specific resource
 func (s *Server) createResourceHandler(uri string) server.ResourceHandlerFunc {
-	return func(ctx context.Context, request mcp.ReadResourceRequest) ([]interface{}, error) {
+	return func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
 		s.logger.Info().
 			Str("uri", request.Params.URI).
 			Msg("Reading resource")
 
 		// Handle resource read
-		result, err := s.handleResourceRead(ctx, request.Params.URI)
+		contents, err := s.handleResourceRead(ctx, request.Params.URI)
 		if err != nil {
 			return nil, err
 		}
 
-		// Return as slice of interface{}
-		return []interface{}{result}, nil
+		return []mcp.ResourceContents{contents}, nil
 	}
 }
 
