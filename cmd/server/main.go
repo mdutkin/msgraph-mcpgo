@@ -27,6 +27,14 @@ import (
 	"github.com/sony/gobreaker"
 )
 
+// Build information, set through -ldflags at build time. Reported at startup
+// and on the readiness endpoint so a running task can be tied back to a commit
+// without inspecting the image.
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 func main() {
 	// Load configuration
 	cfg, err := config.Load()
@@ -44,6 +52,8 @@ func main() {
 		Int("metrics_port", cfg.MetricsPort).
 		Str("public_url", cfg.PublicURL).
 		Bool("mcp_stateless", cfg.MCPStateless).
+		Str("version", version).
+		Str("commit", commit).
 		Msg("Starting MS Graph MCP Server")
 
 	// Initialize metrics

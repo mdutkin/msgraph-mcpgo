@@ -90,8 +90,24 @@ mock: ## Generate mocks for testing
 	@echo "Generating mocks..."
 	mockery --all --output=test/mocks --case=underscore
 
-docker-build: ## Build Docker image
-	docker build -t $(BINARY_NAME):latest .
+# A literal comma cannot appear inside $(if ...) without being read as an
+# argument separator, so it is held in a variable.
+COMMA := ,
 
-docker-run: ## Run Docker container
-	docker run -p 8080:8080 --env-file .env $(BINARY_NAME):latest
+# CACERTS points at the corporate root CA on a workstation behind TLS
+# interception. The secret is optional; the build works without it on an
+# unintercepted network.
+CA_SECRET = $(if $(CACERTS),--secret id=corp_ca$(COMMA)src=$(CACERTS),)
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+
+docker-build: ## Build Docker image (pass CACERTS=/path/to/ca.pem behind a TLS-intercepting proxy)
+	docker build $(CA_SECRET) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(COMMIT) \
+		-t $(BINARY_NAME):latest .
+
+docker-run: ## Run Docker container unprivileged with a read-only root filesystem
+	docker run --rm -p 8080:8080 \
+		--read-only --user 10001:10001 --cap-drop ALL \
+		--env-file .env $(BINARY_NAME):latest

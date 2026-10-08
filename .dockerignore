@@ -1,0 +1,16 @@
+# Keep the build context small and keep local secrets out of the image.
+.git
+.gitignore
+.idea
+.vscode
+.env
+.env.*
+!.env.example
+bin/
+coverage.out
+*.test
+plans/
+static/
+README.md
+Makefile
+.air.toml

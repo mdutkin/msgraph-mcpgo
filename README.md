@@ -36,7 +36,7 @@ No caller state is held on the server, so any task can serve any request.
 
 - Go 1.26 or later
 - A Microsoft Entra ID tenant and app registration
-- Docker (optional)
+- Docker with BuildKit (optional)
 
 ## Microsoft Entra ID setup
 
@@ -93,6 +93,28 @@ Default endpoints:
 - Liveness: http://localhost:8080/health/live
 - Readiness: http://localhost:8080/health/ready
 - Prometheus metrics: http://localhost:9090/metrics
+
+## Container image
+
+    make docker-build
+    make docker-run
+
+The image runs as uid 10001, needs no privileged port and writes nothing to
+disk, so it should be deployed with a read-only root filesystem and all
+capabilities dropped. `make docker-run` applies both locally.
+
+Base images are pinned to a patch version, and the build stamps the version and
+commit into the binary through `-ldflags`; both are reported in the startup log
+so a running task can be tied back to a commit without inspecting the image.
+
+Behind a TLS-intercepting proxy, pass the corporate root CA as a BuildKit
+secret so that module download and runtime egress trust it:
+
+    make docker-build CACERTS=/path/to/corporate-root-ca.pem
+
+The certificate is mounted as a secret rather than copied into the build
+context, so it never becomes an image layer and never reaches a registry. The
+secret is optional and the same Dockerfile builds unchanged without it.
 
 ## Configuration
 
