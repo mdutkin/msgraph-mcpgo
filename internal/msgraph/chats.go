@@ -181,10 +181,10 @@ type GetChatMessagesRequest struct {
 }
 
 // GetChatMessages returns messages from a specific chat. When the request
-// includes an AttachmentExtractor, each message's attachments are fetched
-// (via $expand=attachments) and routed through the same extraction pipeline
-// used for email attachments: text-extractable formats return markdown,
-// binary/oversize/unsupported attachments return metadata with a note.
+// includes an AttachmentExtractor, each message's attachments are routed
+// through the same extraction pipeline used for email attachments:
+// text-extractable formats return markdown, binary/oversize/unsupported
+// attachments return metadata with a note.
 // Requires Chat.Read (Delegated).
 func (c *Client) GetChatMessages(ctx context.Context, req GetChatMessagesRequest) ([]*ChatMessage, error) {
 	if req.ChatID == "" {
@@ -206,9 +206,18 @@ func (c *Client) GetChatMessages(ctx context.Context, req GetChatMessagesRequest
 				// The API will return all fields; we filter client-side.
 			},
 		}
-		if req.AttachmentExtractor != nil {
-			cfg.QueryParameters.Expand = []string{"attachments"}
-		}
+		// NOTE: $expand is NOT supported for attachments here either.
+		// On microsoft.graph.chatMessage, "attachments" is a collection of
+		// the complex type chatMessageAttachment rather than a navigation
+		// property, and only navigation properties can be expanded. Asking
+		// for it fails the whole request:
+		//
+		//   Parsing OData Select and Expand failed: Property 'attachments'
+		//   on type 'microsoft.graph.chatMessage' is not a navigation
+		//   property or complex property.
+		//
+		// No expand is needed: Graph returns attachments with the message by
+		// default, so msg.GetAttachments() below is already populated.
 
 		result, err := c.graphClient.Chats().ByChatId(req.ChatID).Messages().Get(ctx, cfg)
 		if err != nil {
