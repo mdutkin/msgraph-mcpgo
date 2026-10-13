@@ -38,6 +38,31 @@ func sortedKeys(m map[string][]string) []string {
 	return keys
 }
 
+// advertisedScopes reports the scope values a client must request to obtain the
+// token this deployment accepts in the Authorization header. The answer depends
+// on the authentication mode, so the metadata document cannot name a fixed one.
+//
+// In obo, verified_identity, graph_passthrough and disabled the header is read
+// the same way but is expected to hold different credentials. Every mode except
+// obo expects a Microsoft Graph token, and the delegated permissions behind
+// ".default" are whatever the calling application's own registration has
+// consented. In obo mode the caller must present a token issued for this API
+// instead, because the on-behalf-of grant requires an assertion whose audience
+// is this application; advertising the Graph scope there would send a client
+// that discovers its scopes from this document to fetch a credential the
+// authentication middleware then rejects.
+//
+// ".default" is used for the API as well, which requests whatever delegated
+// permissions the calling application already has consent for on this
+// registration. A deployment that exposes named scopes and wants one of them
+// advertised instead must state it here.
+func advertisedScopes(mode auth.ValidationMode, clientID string) []string {
+	if mode == auth.ModeOBO {
+		return []string{"api://" + clientID + "/.default"}
+	}
+	return []string{"https://graph.microsoft.com/.default"}
+}
+
 // Build information, set through -ldflags at build time. Reported at startup
 // and on the readiness endpoint so a running task can be tied back to a commit
 // without inspecting the image.
@@ -332,11 +357,7 @@ func main() {
 			AuthorizationServers: []string{
 				fmt.Sprintf("https://login.microsoftonline.com/%s/v2.0", cfg.AzureTenantID),
 			},
-			// Clients obtain a Microsoft Graph token, not a token for this
-			// server, so the advertised scope is a Graph scope. The delegated
-			// permissions behind ".default" are whatever the calling
-			// application's own registration has consented.
-			ScopesSupported:        []string{"https://graph.microsoft.com/.default"},
+			ScopesSupported:        advertisedScopes(validationMode, cfg.AzureClientID),
 			BearerMethodsSupported: []string{"header"},
 			ResourceName:           "Microsoft Graph MCP Server",
 		},
