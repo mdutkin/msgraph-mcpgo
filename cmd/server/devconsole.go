@@ -62,8 +62,13 @@ type devAuthProxy struct {
 }
 
 func (p *devAuthProxy) deviceCode(w http.ResponseWriter, r *http.Request) {
-	// The console acquires a Microsoft Graph token directly, which is the
-	// same kind of credential LibreChat forwards in production.
+	// The console acquires a Microsoft Graph token directly and sends it as the
+	// only credential, so it exercises AUTH_MODE=graph_passthrough and nothing
+	// else. verified_identity additionally requires a verifiable assertion in
+	// IdentityAssertionHeader, which the console page does not send. obo
+	// expects a token issued for this API rather than for Graph, which this
+	// public client cannot obtain, so the server rejects the console's token on
+	// audience.
 	scopes := r.FormValue("scope")
 	if scopes == "" {
 		scopes = "https://graph.microsoft.com/.default offline_access"
